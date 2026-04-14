@@ -1,0 +1,13 @@
+google-genai
+pydantic
+pdf2image
+python-dotenv
+aiofiles
+rich
+fastapi
+uvicorn
+redis
+supabase
+langgraph
+httpx
+python-multipart
