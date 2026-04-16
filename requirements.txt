@@ -1,4 +1,5 @@
 google-genai
+pypdf
 pydantic
 python-dotenv
 aiofiles

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from uuid import uuid4
+import uuid
+from typing import Any
 
 import aiofiles
 import asyncpg
@@ -11,6 +12,7 @@ from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
+from src.core.pdf_splitter import split_pdf
 from src.infrastructure.redis_queue import RedisQueue
 from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository
 
@@ -29,7 +31,7 @@ def _raise_if_missing_supabase_tables(exc: asyncpg.PostgresError) -> None:
 
 
 class IngestResponse(BaseModel):
-    job_id: str
+    job_ids: list[str]
 
 
 class ApproveRequest(BaseModel):
@@ -45,27 +47,38 @@ async def ingest(file: UploadFile) -> IngestResponse:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
-    job_id = str(uuid4())
+    if not settings.database_url:
+        raise HTTPException(status_code=500, detail="Database URL not configured")
+
+    job_id = str(uuid.uuid4())
     target_path = settings.uploads_dir / f"{job_id}.pdf"
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
+        content = await file.read()
         async with aiofiles.open(target_path, "wb") as f:
-            content = await file.read()
             await f.write(content)
 
-        if not settings.database_url:
-            raise HTTPException(status_code=500, detail="Database URL not configured")
+        split_paths = split_pdf(target_path, output_dir=settings.uploads_dir)
 
         jobs = SupabaseJobsRepository(settings.database_url)
-        await jobs.create_job(job_id=job_id, file_url=str(target_path))
-
         queue = RedisQueue.from_settings(settings)
+        job_ids: list[str] = []
+
         try:
-            await queue.enqueue_job(job_id=job_id, file_path=str(target_path))
-        except Exception:
-            await jobs.mark_failed(job_id, "Job created but enqueue to Redis failed")
-            raise
+            for sp in split_paths:
+                sp_job_id = str(uuid.uuid4())
+                await jobs.create_job(job_id=sp_job_id, file_url=sp)
+                await queue.enqueue_job(job_id=sp_job_id, file_path=sp)
+                job_ids.append(sp_job_id)
+        except Exception as exc:
+            logger.exception("step=ingest enqueue_failed count=%s", len(job_ids))
+            for jid in job_ids:
+                try:
+                    await jobs.mark_failed(jid, f"Enqueue failed: {exc}")
+                except Exception:
+                    pass
+            raise HTTPException(status_code=500, detail="Split/_enqueue failed") from exc
         finally:
             await queue.close()
     except asyncpg.PostgresError as exc:
@@ -82,7 +95,7 @@ async def ingest(file: UploadFile) -> IngestResponse:
         logger.exception("step=ingest status=failed job_id=%s", job_id)
         raise HTTPException(status_code=500, detail="Ingest failed") from exc
 
-    return IngestResponse(job_id=job_id)
+    return IngestResponse(job_ids=job_ids)
 
 
 @router.get("/jobs/{job_id}")

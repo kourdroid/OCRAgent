@@ -10,7 +10,7 @@ import re
 import time
 import base64
 import io
-from typing import Any
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, Field, create_model
 
@@ -396,7 +396,8 @@ def _registry_schema_to_pydantic_model(schema: RegistrySchema) -> type[BaseModel
         elif field_def.type == "date":
             fields[field_def.key] = (str, ...)
         elif field_def.type == "list":
-            fields[field_def.key] = (list[str], ...)
+            # Structured dicts so Gemini returns tabular data (description, qty, unit_price, total) natively
+            fields[field_def.key] = (List[Dict[str, Any]], ...)
         else:
             raise ValueError(f"Unsupported field type: {field_def.type}")
     return create_model(f"Extraction_{schema.vendor_name}_v{schema.version}", **fields)  # type: ignore[arg-type]
@@ -412,12 +413,14 @@ async def extract_with_schema(
     extraction_model = _registry_schema_to_pydantic_model(schema)
     prompt = "\n".join(
         [
-            "You are an OCR extraction engine specialized in logistics invoices.",
-            "Extract the requested fields from the document.",
+            "You are an elite enterprise OCR extraction engine.",
+            "WARNING: The attached PDF may contain MULTIPLE invoices merged into one file, OR a single multi-page invoice.",
             "Rules:",
             "1) Return ONLY valid JSON matching the provided schema.",
-            "2) Use ISO 8601 for dates (YYYY-MM-DD) when relevant.",
-            "3) Never invent values; if a field is missing, make your best effort from visible text.",
+            "2) For fields like 'line_items', you MUST extract ALL items across ALL pages of the document. Do not stop at page 1.",
+            "3) Format 'line_items' as a list of JSON objects containing: description, quantity, unit_price, and total.",
+            "4) If there are multiple invoices, aggregate the line items, but use the Invoice Number and Dates from the FIRST invoice in the packet.",
+            "5) Never invent values. Use ISO 8601 for dates (YYYY-MM-DD).",
         ]
     )
     payload = await _generate_json(
