@@ -9,7 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from src.config import get_settings
 from src.core.graph import GraphDeps, build_graph
 from src.infrastructure.redis_queue import RedisQueue
-from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository, get_supabase_client
+from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository
 from src.infrastructure.webhook_client import HttpWebhookClient
 
 logger = logging.getLogger(__name__)
@@ -60,9 +60,11 @@ async def _process_message(*, graph: Any, jobs: Any, queue: Any, message_id: str
 async def run_worker() -> None:
     settings = get_settings()
 
-    supabase = get_supabase_client(settings)
-    registry = SupabaseRegistryRepository(supabase)
-    jobs = SupabaseJobsRepository(supabase)
+    if not settings.database_url:
+        raise ValueError("DATABASE_URL is not configured")
+
+    registry = SupabaseRegistryRepository(settings.database_url)
+    jobs = SupabaseJobsRepository(settings.database_url)
     webhook = HttpWebhookClient(settings.webhook_url)
 
     deps = GraphDeps(registry=registry, jobs=jobs, webhook=webhook)

@@ -1,13 +1,13 @@
 google-genai
 pydantic
-pdf2image
 python-dotenv
 aiofiles
 rich
 fastapi
 uvicorn
 redis
-supabase
+asyncpg
 langgraph
 httpx
 python-multipart
+openai

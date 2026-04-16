@@ -16,11 +16,11 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MODEL_NAME: ${MODEL_NAME:-gemini-3-flash-preview}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379/0
     dns:
       - 1.1.1.1
@@ -38,11 +38,11 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MODEL_NAME: ${MODEL_NAME:-gemini-3-flash-preview}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379/0
     dns:
       - 1.1.1.1

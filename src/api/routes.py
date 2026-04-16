@@ -2,45 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import ast
 from uuid import uuid4
 
 import aiofiles
+import asyncpg
 import redis.asyncio as redis
 from fastapi import APIRouter, HTTPException, UploadFile
-from postgrest.exceptions import APIError as PostgrestAPIError
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
 from src.infrastructure.redis_queue import RedisQueue
-from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository, get_supabase_client
+from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _postgrest_error_payload(exc: PostgrestAPIError) -> dict:
-    if exc.args and isinstance(exc.args[0], dict):
-        return exc.args[0]
-    if exc.args and isinstance(exc.args[0], str):
-        raw = exc.args[0]
-        try:
-            parsed = ast.literal_eval(raw)
-            if isinstance(parsed, dict):
-                return parsed
-        except (SyntaxError, ValueError):
-            return {"message": raw}
-    return {"message": str(exc)}
-
-
-def _raise_if_missing_supabase_tables(exc: PostgrestAPIError) -> None:
-    payload = _postgrest_error_payload(exc)
-    code = payload.get("code")
-    if code != "PGRST205" and "PGRST205" not in str(payload):
+def _raise_if_missing_supabase_tables(exc: asyncpg.PostgresError) -> None:
+    code = getattr(exc, "sqlstate", "")
+    if code != "42P01": # undefined_table
         return
     raise HTTPException(
         status_code=503,
-        detail="Supabase tables missing. Run sql/001_registry_jobs.sql in this Supabase project and wait for schema cache refresh.",
+        detail="Database tables missing. Run sql/001_registry_jobs.sql.",
     )
 
 
@@ -70,8 +54,10 @@ async def ingest(file: UploadFile) -> IngestResponse:
             content = await file.read()
             await f.write(content)
 
-        supabase = get_supabase_client(settings)
-        jobs = SupabaseJobsRepository(supabase)
+        if not settings.database_url:
+            raise HTTPException(status_code=500, detail="Database URL not configured")
+
+        jobs = SupabaseJobsRepository(settings.database_url)
         await jobs.create_job(job_id=job_id, file_url=str(target_path))
 
         queue = RedisQueue.from_settings(settings)
@@ -82,14 +68,14 @@ async def ingest(file: UploadFile) -> IngestResponse:
             raise
         finally:
             await queue.close()
-    except PostgrestAPIError as exc:
-        logger.exception("step=ingest status=failed job_id=%s error=%s", job_id, _postgrest_error_payload(exc))
+    except asyncpg.PostgresError as exc:
+        logger.exception("step=ingest status=failed job_id=%s error=%s", job_id, str(exc))
         try:
             target_path.unlink(missing_ok=True)
         except OSError:
             logger.warning("step=ingest cleanup=failed file=%s", target_path)
         _raise_if_missing_supabase_tables(exc)
-        raise HTTPException(status_code=502, detail="Supabase API error") from exc
+        raise HTTPException(status_code=502, detail="Database API error") from exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -102,31 +88,43 @@ async def ingest(file: UploadFile) -> IngestResponse:
 @router.get("/jobs/{job_id}")
 async def get_job_status(job_id: str) -> dict:
     settings = get_settings()
-    supabase = get_supabase_client(settings)
-    jobs = SupabaseJobsRepository(supabase)
+    if not settings.database_url:
+        raise HTTPException(status_code=500, detail="Database URL not configured")
+        
+    jobs = SupabaseJobsRepository(settings.database_url)
     
     try:
         job = await jobs.get_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         return job
-    except PostgrestAPIError as exc:
-        logger.exception("step=get_job status=failed job_id=%s error=%s", job_id, _postgrest_error_payload(exc))
+    except asyncpg.PostgresError as exc:
+        logger.exception("step=get_job status=failed job_id=%s error=%s", job_id, str(exc))
         _raise_if_missing_supabase_tables(exc)
-        raise HTTPException(status_code=502, detail="Supabase API error") from exc
+        raise HTTPException(status_code=502, detail="Database API error") from exc
 
 
 @router.post("/approve")
 async def approve(payload: ApproveRequest) -> dict:
     settings = get_settings()
+    if not settings.database_url:
+        raise HTTPException(status_code=500, detail="Database URL not configured")
+        
     try:
-        supabase = get_supabase_client(settings)
+        registry = SupabaseRegistryRepository(settings.database_url)
+        jobs = SupabaseJobsRepository(settings.database_url)
 
-        registry = SupabaseRegistryRepository(supabase)
-        jobs = SupabaseJobsRepository(supabase)
+        job = await jobs.get_job(payload.job_id)
+        if not job:
+             raise HTTPException(status_code=404, detail="Job not found")
+        extracted = job.get("extracted_data") or {}
+        fingerprint_hash = extracted.get("fingerprint_hash")
+        ocr_text_cache = extracted.get("ocr_text_cache")
 
         await registry.upsert_schema(
             vendor_name=payload.vendor_name,
+            fingerprint_hash=fingerprint_hash,
+            ocr_text_cache=ocr_text_cache,
             schema_definition=payload.schema_definition,
         )
 
@@ -140,10 +138,10 @@ async def approve(payload: ApproveRequest) -> dict:
             await queue.enqueue_job(job_id=payload.job_id, file_path=file_path)
         finally:
             await queue.close()
-    except PostgrestAPIError as exc:
-        logger.exception("step=approve status=failed job_id=%s error=%s", payload.job_id, _postgrest_error_payload(exc))
+    except asyncpg.PostgresError as exc:
+        logger.exception("step=approve status=failed job_id=%s error=%s", payload.job_id, str(exc))
         _raise_if_missing_supabase_tables(exc)
-        raise HTTPException(status_code=502, detail="Supabase API error") from exc
+        raise HTTPException(status_code=502, detail="Database API error") from exc
 
     return {"status": "queued", "job_id": payload.job_id}
 
@@ -168,25 +166,27 @@ async def health() -> dict:
     finally:
         await redis_client.aclose()
 
-    if not settings.supabase_url or not settings.supabase_service_role_key:
+    if not settings.database_url:
         report["supabase"] = {"ok": False, "status": "disabled"}
         report["status"] = "degraded"
         return report
 
-    supabase = get_supabase_client(settings)
-
-    def _check_tables() -> dict[str, object]:
+    async def _check_tables() -> dict[str, object]:
         try:
-            supabase.table("processing_jobs").select("job_id").limit(1).execute()
-            supabase.table("document_registry").select("id").limit(1).execute()
-            return {"ok": True}
-        except PostgrestAPIError as exc:
-            payload = _postgrest_error_payload(exc)
-            return {"ok": False, "error": payload}
+            conn = await asyncpg.connect(settings.database_url, statement_cache_size=0)
+            try:
+                await conn.execute("SELECT job_id FROM processing_jobs LIMIT 1")
+                await conn.execute("SELECT id FROM document_registry LIMIT 1")
+                return {"ok": True}
+            finally:
+                await conn.close()
+        except asyncpg.PostgresError as exc:
+            code = getattr(exc, "sqlstate", "")
+            return {"ok": False, "error": str(exc), "code": code}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    supabase_result = await asyncio.to_thread(_check_tables)
+    supabase_result = await _check_tables()
     report["supabase"] = supabase_result
     if not bool(supabase_result.get("ok")):
         report["status"] = "degraded"

@@ -8,6 +8,8 @@ import logging
 import random
 import re
 import time
+import base64
+import io
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
@@ -122,14 +124,92 @@ def _model_name_candidates(primary: str) -> list[str]:
     return out
 
 
+async def _generate_json_openrouter(
+    *,
+    settings: Settings,
+    prompt: str,
+    images: list[Any] | Any,
+    response_model: type[BaseModel],
+    timeout_s: float,
+) -> dict[str, Any]:
+    from openai import AsyncOpenAI
+    
+    client = AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=settings.openrouter_api_key,
+    )
+    
+    content_list: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    
+    img_list = images if isinstance(images, list) else [images]
+    for img in img_list:
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG")
+        base64_image = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
+    
+    schema_dict = get_clean_schema(response_model)
+    messages = [
+        {
+            "role": "user",
+            "content": content_list
+        }
+    ]
+    model_name = settings.model_name
+    
+    # If using OpenRouter with a generic Gemini model string from .env, 
+    # OpenRouter requires the 'google/' provider prefix
+    if "gemini" in model_name and "google/" not in model_name: 
+        model_name = f"google/{model_name}"
+
+    try:
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=model_name,
+                messages=messages, # type: ignore
+                temperature=settings.temperature,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "extraction_schema",
+                        "strict": False,
+                        "schema": schema_dict
+                    }
+                }
+            ),
+            timeout=timeout_s,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise RuntimeError("Empty response from OpenRouter")
+        return json.loads(content)
+    except Exception as exc:
+        logger.error(f"step=openrouter_call model={model_name} error={str(exc)}")
+        raise
+
 async def _generate_json(
     *,
     settings: Settings,
     prompt: str,
-    image: Any,
+    images: list[Any] | Any,
     response_model: type[BaseModel],
     timeout_s: float,
 ) -> dict[str, Any]:
+    from google.genai import types
+    has_part = isinstance(images, types.Part) or (isinstance(images, list) and any(isinstance(img, types.Part) for img in images))
+
+    if settings.openrouter_api_key and not has_part:
+        return await _generate_json_openrouter(
+            settings=settings,
+            prompt=prompt,
+            images=images,
+            response_model=response_model,
+            timeout_s=timeout_s
+        )
+
+    if not settings.google_api_key:
+        raise RuntimeError("No Google API key and no OpenRouter API key provided.")
+
     from google import genai
     from google.genai import errors, types
 
@@ -165,10 +245,11 @@ async def _generate_json(
                 time_spent = time.monotonic() - overall_start
                 remaining_timeout = max(5.0, timeout_s - time_spent)
 
+                img_list = images if isinstance(images, list) else [images]
                 response = await asyncio.wait_for(
                     client.aio.models.generate_content(
                         model=model_name,
-                        contents=[prompt, image],
+                        contents=[prompt, *img_list],
                         config=types.GenerateContentConfig(
                             temperature=settings.temperature,
                             response_mime_type="application/json",
@@ -263,7 +344,7 @@ async def identify_vendor(image: Any, *, timeout_s: float = 60.0) -> VendorIdent
     payload = await _generate_json(
         settings=settings,
         prompt=prompt,
-        image=image,
+        images=image,
         response_model=VendorIdentification,
         timeout_s=timeout_s,
     )
@@ -285,7 +366,7 @@ async def discover_schema(image: Any, *, timeout_s: float = 90.0) -> RegistrySch
     payload = await _generate_json(
         settings=settings,
         prompt=prompt,
-        image=image,
+        images=image,
         response_model=RegistrySchema,
         timeout_s=timeout_s,
     )
@@ -322,7 +403,7 @@ def _registry_schema_to_pydantic_model(schema: RegistrySchema) -> type[BaseModel
 
 
 async def extract_with_schema(
-    image: Any,
+    images: list[Any] | Any,
     schema: RegistrySchema,
     *,
     timeout_s: float = 120.0,
@@ -342,7 +423,7 @@ async def extract_with_schema(
     payload = await _generate_json(
         settings=settings,
         prompt=prompt,
-        image=image,
+        images=images,
         response_model=extraction_model,
         timeout_s=timeout_s,
     )
