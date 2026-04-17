@@ -8,9 +8,62 @@ Compares: Invoice (extracted) vs Purchase Order vs Goods Receipt.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _normalize_description(value: Any) -> str:
+    text = str(value or "").lower().strip()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def _match_score(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    if left in right or right in left:
+        shorter = min(len(left), len(right))
+        longer = max(len(left), len(right))
+        return shorter / longer if longer else 0.0
+
+    left_tokens = set(left.split())
+    right_tokens = set(right.split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+
+    overlap = left_tokens & right_tokens
+    if not overlap:
+        return 0.0
+
+    return len(overlap) / max(len(left_tokens), len(right_tokens))
+
+
+def _find_best_match(description: str, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    normalized_description = _normalize_description(description)
+    best_match: dict[str, Any] | None = None
+    best_score = 0.0
+
+    for candidate in candidates:
+        score = _match_score(
+            normalized_description,
+            _normalize_description(candidate.get("item_description")),
+        )
+        if score > best_score:
+            best_score = score
+            best_match = candidate
+
+    return best_match if best_score >= 0.4 else None
 
 
 def execute_3_way_match(
@@ -35,19 +88,12 @@ def execute_3_way_match(
     discrepancies: list[dict[str, Any]] = []
 
     for inv_item in invoice_data.get("line_items", []):
-        desc = inv_item.get("description", "")
-        inv_qty = float(inv_item.get("quantity", 0))
-        inv_price = float(inv_item.get("unit_price", 0))
+        desc = str(inv_item.get("description", "") or "").strip()
+        inv_qty = _coerce_float(inv_item.get("quantity"))
+        inv_price = _coerce_float(inv_item.get("unit_price"))
 
-        # ── 1. Map to PO line (substring match for MVP) ──
-        po_line = next(
-            (po for po in po_lines if po["item_description"] in desc or desc in po["item_description"]),
-            None,
-        )
-        receipt_line = next(
-            (gr for gr in receipt_lines if gr["item_description"] in desc or desc in gr["item_description"]),
-            None,
-        )
+        po_line = _find_best_match(desc, po_lines)
+        receipt_line = _find_best_match(desc, receipt_lines)
 
         if not po_line:
             discrepancies.append({
@@ -58,7 +104,7 @@ def execute_3_way_match(
             continue
 
         # ── 2. Price match: Invoice vs Purchase Order ──
-        expected_price = float(po_line["expected_unit_price"])
+        expected_price = _coerce_float(po_line.get("expected_unit_price"))
         if expected_price > 0:
             price_diff = abs(inv_price - expected_price)
             if (price_diff / expected_price) > price_tolerance:
@@ -71,22 +117,15 @@ def execute_3_way_match(
                 })
 
         # ── 3. Quantity match: Invoice vs Goods Receipt ──
-        if not receipt_line:
+        received_qty = _coerce_float(receipt_line.get("actual_received_qty") if receipt_line else 0.0)
+        if inv_qty > received_qty:
             discrepancies.append({
-                "type": "MISSING_RECEIPT",
+                "type": "QUANTITY_SHORTAGE",
                 "item": desc,
-                "message": "Item billed, but never received by warehouse.",
+                "received": received_qty,
+                "billed": inv_qty,
+                "shortfall": round(inv_qty - received_qty, 2),
             })
-        else:
-            received_qty = float(receipt_line["actual_received_qty"])
-            if inv_qty > received_qty:
-                discrepancies.append({
-                    "type": "QUANTITY_SHORTAGE",
-                    "item": desc,
-                    "received": received_qty,
-                    "billed": inv_qty,
-                    "over_billed": round(inv_qty - received_qty, 2),
-                })
 
     status = "BLOCKED_DISCREPANCY" if discrepancies else "CLEARED_FOR_PAYMENT"
 

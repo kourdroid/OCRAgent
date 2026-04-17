@@ -21,6 +21,16 @@ def _sanitize_for_match(text: str) -> str:
     return re.sub(r'\d+', '', re.sub(r'[\/:\-\.]+', ' ', text)).strip().lower()
 
 
+def _extract_po_number(value: Any) -> str:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return ""
+
+    first_segment = raw_value.split("/", 1)[0].splitlines()[0].strip()
+    match = re.search(r"[A-Za-z]{1,10}[A-Za-z0-9\-]*\d[A-Za-z0-9\-]*", first_segment)
+    return match.group(0).strip() if match else first_segment
+
+
 class RegistryRepository(Protocol):
     async def get_vendor_schemas(self, vendor_name: str) -> list[dict[str, Any]]: ...
     async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]: ...
@@ -170,36 +180,35 @@ async def _node_extract(state: AgentState, deps: GraphDeps) -> Command[str]:
 async def _node_reconcile(state: AgentState, deps: GraphDeps) -> Command[str]:
     job_id = state.get("job_id")
     extracted_data = state.get("final_output", {})
+    vendor_name = state.get("detected_vendor")
 
     logger.info("job=%s step=reconcile status=start", job_id)
 
-    # 1. Parse PO number from extracted data (e.g. "CO2109-0171 / 17/09/2021" → "CO2109-0171")
     raw_po = extracted_data.get("order_reference", "") or extracted_data.get("po_number", "") or ""
-    clean_po = raw_po.split("/")[0].strip() if raw_po else ""
+    clean_po = _extract_po_number(raw_po)
 
     if not clean_po:
-        logger.warning("job=%s step=reconcile status=skipped reason=no_po_found", job_id)
-        audit = {"status": "SKIPPED", "reason": "No PO number found in extracted data"}
+        logger.warning("job=%s step=reconcile status=blocked reason=no_po_found", job_id)
+        audit = {
+            "status": "BLOCKED_DISCREPANCY",
+            "discrepancies": [
+                {
+                    "type": "UNAUTHORIZED_ITEM",
+                    "item": "PO_REFERENCE",
+                    "message": "No purchase order reference found in extracted invoice data.",
+                }
+            ],
+        }
         extracted_data["audit_report"] = audit
+        if job_id:
+            await deps.jobs.mark_completed(job_id, vendor_name, extracted_data)
         return Command(
             update={"final_output": extracted_data, "reconciliation_audit": audit},
             goto="deliver_webhook",
         )
 
-    # 2. Fetch ERP data via the registry repo (same connection string)
     po_lines = await deps.registry.get_po_lines(clean_po)
     receipt_lines = await deps.registry.get_goods_receipts(clean_po)
-
-    if not po_lines:
-        logger.warning("job=%s step=reconcile status=skipped reason=po_not_in_erp po=%s", job_id, clean_po)
-        audit = {"status": "SKIPPED", "reason": f"PO {clean_po} not found in ERP"}
-        extracted_data["audit_report"] = audit
-        return Command(
-            update={"final_output": extracted_data, "reconciliation_audit": audit},
-            goto="deliver_webhook",
-        )
-
-    # 3. Execute the deterministic 3-Way Match
     audit_report = execute_3_way_match(
         invoice_data=extracted_data,
         po_lines=po_lines,
@@ -214,9 +223,8 @@ async def _node_reconcile(state: AgentState, deps: GraphDeps) -> Command[str]:
 
     extracted_data["audit_report"] = audit_report
 
-    # Re-persist the enriched payload with the audit attached
-    vendor_name = state.get("detected_vendor")
-    await deps.jobs.mark_completed(job_id, vendor_name, extracted_data)
+    if job_id:
+        await deps.jobs.mark_completed(job_id, vendor_name, extracted_data)
 
     return Command(
         update={"final_output": extracted_data, "reconciliation_audit": audit_report},
