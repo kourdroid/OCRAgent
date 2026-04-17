@@ -17,4 +17,5 @@ class AgentState(TypedDict, total=False):
     drift_confidence: float
 
     final_output: Optional[dict[str, Any]]
+    reconciliation_audit: Optional[dict[str, Any]]
     error: Optional[str]

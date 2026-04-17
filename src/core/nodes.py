@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import hashlib
+import io
 import json
 import logging
 import random
 import re
 import time
-import base64
-import io
-from typing import Any, Dict, List
+from typing import Any
 
 from pydantic import BaseModel, Field, create_model
 
 from src.config import Settings, get_settings
-from src.schemas import RegistrySchema
+from src.schemas import LineItem, RegistrySchema
 
 logger = logging.getLogger(__name__)
 
@@ -97,239 +97,182 @@ def get_clean_schema(pydantic_model: type[BaseModel]) -> dict[str, Any]:
 def _model_name_candidates(primary: str) -> list[str]:
     """
     Returns a list of model names to try in order.
-    Prioritizes the primary model, then falls back to stable production models.
+    Primary comes from MODEL_NAME in .env. No hardcoded fallbacks.
     """
-    candidates = [primary]
-    
-    # Fallback hierarchy:
-    # 1. gemini-3-flash-preview: Latest preview (User Requested).
-    # 2. gemini-2.0-flash: Next-gen, fast, stable.
-    # 3. gemini-2.0-flash-lite: Low cost backup.
-    # NOTE: gemini-1.5-flash removed due to v1beta 404 errors.
-    
-    defaults = [
-        "gemini-3-flash-preview",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite"
-    ]
-    
-    candidates.extend(defaults)
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for c in candidates:
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
+    return [primary]
 
 
-async def _generate_json_openrouter(
-    *,
-    settings: Settings,
-    prompt: str,
-    images: list[Any] | Any,
-    response_model: type[BaseModel],
-    timeout_s: float,
-) -> dict[str, Any]:
-    from openai import AsyncOpenAI
-    
-    client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=settings.openrouter_api_key,
-    )
-    
-    content_list: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    
-    img_list = images if isinstance(images, list) else [images]
-    for img in img_list:
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG")
-        base64_image = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
-    
-    schema_dict = get_clean_schema(response_model)
-    messages = [
-        {
-            "role": "user",
-            "content": content_list
+def _part_to_content_dict(part: Any) -> dict[str, Any]:
+    """
+    Convert a google.genai.types.Part (or any object with .mime_type and .data)
+    into an OpenRouter-compatible message content dict.
+    """
+    mime_type = getattr(part, "mime_type", "") or ""
+    data_bytes = getattr(part, "data", b"") or b""
+
+    if not data_bytes:
+        return {"type": "text", "text": ""}
+
+    b64 = base64.b64encode(data_bytes).decode("utf-8")
+
+    if mime_type == "application/pdf":
+        return {
+            "type": "file",
+            "file": {
+                "filename": "document.pdf",
+                "file_data": f"data:application/pdf;base64,{b64}",
+            },
         }
-    ]
-    model_name = settings.model_name
-    
-    # If using OpenRouter with a generic Gemini model string from .env, 
-    # OpenRouter requires the 'google/' provider prefix
-    if "gemini" in model_name and "google/" not in model_name: 
-        model_name = f"google/{model_name}"
 
-    try:
-        response = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=model_name,
-                messages=messages, # type: ignore
-                temperature=settings.temperature,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "extraction_schema",
-                        "strict": False,
-                        "schema": schema_dict
-                    }
-                }
-            ),
-            timeout=timeout_s,
-        )
-        content = response.choices[0].message.content
-        if not content:
-            raise RuntimeError("Empty response from OpenRouter")
-        return json.loads(content)
-    except Exception as exc:
-        logger.error(f"step=openrouter_call model={model_name} error={str(exc)}")
-        raise
+    if mime_type.startswith("image/"):
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime_type};base64,{b64}"},
+        }
+
+    return {"type": "text", "text": f"[Unsupported mime type: {mime_type}]"}
+
+
+def _normalize_images_for_openrouter(images: Any) -> list[dict[str, Any]]:
+    """
+    Convert a list of Parts / PIL Images / base64 strings into
+    OpenRouter-compatible content dicts.
+    """
+    img_list = images if isinstance(images, list) else [images]
+    result: list[dict[str, Any]] = []
+
+    for img in img_list:
+        if hasattr(img, "mime_type") and hasattr(img, "data"):
+            result.append(_part_to_content_dict(img))
+        elif hasattr(img, "save"):
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG")
+            b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            result.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+        elif isinstance(img, str):
+            result.append({"type": "text", "text": img})
+        elif isinstance(img, dict):
+            result.append(img)
+
+    return result
+
 
 async def _generate_json(
     *,
     settings: Settings,
     prompt: str,
-    images: list[Any] | Any,
+    images: Any,
     response_model: type[BaseModel],
-    timeout_s: float,
+    timeout_s: float = 120.0,
 ) -> dict[str, Any]:
-    from google.genai import types
-    has_part = isinstance(images, types.Part) or (isinstance(images, list) and any(isinstance(img, types.Part) for img in images))
+    from openai import AsyncOpenAI
 
-    if settings.openrouter_api_key and not has_part:
-        return await _generate_json_openrouter(
-            settings=settings,
-            prompt=prompt,
-            images=images,
-            response_model=response_model,
-            timeout_s=timeout_s
-        )
+    if not settings.openrouter_api_key:
+        raise RuntimeError("No OpenRouter API key provided. Set OPENROUTER_API_KEY in your environment.")
 
-    if not settings.google_api_key:
-        raise RuntimeError("No Google API key and no OpenRouter API key provided.")
+    client = AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=settings.openrouter_api_key,
+    )
 
-    from google import genai
-    from google.genai import errors, types
+    schema_dict = get_clean_schema(response_model)
 
-    client = genai.Client(api_key=settings.google_api_key)
-    
-    # We track the last error to raise it if all strategies fail
-    last_error: Exception | None = None
-    
-    # Global timeout tracker to ensure we don't loop forever
-    overall_start = time.monotonic()
+    content_parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    content_parts.extend(_normalize_images_for_openrouter(images))
 
     candidates = _model_name_candidates(settings.model_name)
-    
+
+    last_error: Exception | None = None
+    overall_start = time.monotonic()
+
     for model_name in candidates:
-        # Check if we have burned through the total function timeout
         if (time.monotonic() - overall_start) > timeout_s:
-            logger.error("step=gemini_call status=global_timeout_exceeded")
+            logger.error("step=openrouter_call status=global_timeout_exceeded")
             break
 
-        # Max retries PER MODEL to handle transient 429s
         max_retries = 3
-        base_delay = 2.0  # Start with 2 seconds
+        base_delay = 2.0
 
         for attempt in range(max_retries + 1):
             start = time.monotonic()
-            try:
-                logger.info(
-                    "step=gemini_call model=%s attempt=%d/%d status=start",
-                    model_name, attempt + 1, max_retries + 1
-                )
-                
-                # Calculate remaining timeout for this specific call
-                time_spent = time.monotonic() - overall_start
-                remaining_timeout = max(5.0, timeout_s - time_spent)
 
-                img_list = images if isinstance(images, list) else [images]
+            try:
+                remaining_timeout = max(5.0, timeout_s - (time.monotonic() - overall_start))
+
                 response = await asyncio.wait_for(
-                    client.aio.models.generate_content(
+                    client.chat.completions.create(
                         model=model_name,
-                        contents=[prompt, *img_list],
-                        config=types.GenerateContentConfig(
-                            temperature=settings.temperature,
-                            response_mime_type="application/json",
-                            response_schema=response_model,
-                        ),
+                        messages=[{"role": "user", "content": content_parts}],
+                        temperature=settings.temperature,
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "extraction_schema",
+                                "strict": False,
+                                "schema": schema_dict,
+                            },
+                        },
                     ),
                     timeout=remaining_timeout,
                 )
-                
+
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 logger.info(
-                    "step=gemini_call model=%s status=success duration_ms=%s",
-                    model_name, elapsed_ms
+                    "step=openrouter_call model=%s status=success duration_ms=%s",
+                    model_name, elapsed_ms,
                 )
 
-                if response.parsed:
-                    return response.parsed.model_dump()
-                return json.loads(response.text)
+                content = response.choices[0].message.content
+                if not content:
+                    raise RuntimeError("Empty response from OpenRouter")
 
-            except asyncio.TimeoutError as exc:
-                logger.warning("step=gemini_call model=%s status=timeout", model_name)
-                last_error = exc
-                # Timeouts usually imply the model is hanging, switching might be better than retrying the same one
+                return json.loads(content)
+
+            except asyncio.TimeoutError:
+                logger.warning("step=openrouter_call model=%s status=timeout", model_name)
+                last_error = Exception("TimeoutError")
                 break
 
-            except errors.APIError as exc:
+            except Exception as exc:
                 last_error = exc
-                code = getattr(exc, "code", 0)
-                message = getattr(exc, "message", str(exc))
-                
-                # Handle Rate Limits (429) specifically
-                if code == 429:
+                error_str = str(exc).lower()
+
+                if "429" in error_str or "rate" in error_str or "quota" in error_str:
                     if attempt < max_retries:
-                        # Extract retry delay from error message or default to backoff
-                        # Pattern matches "Please retry in 41.09s" or similar
-                        delay_match = re.search(r"retry in (\d+(\.\d+)?)s", message)
-                        
+                        delay_match = re.search(r"retry in (\d+(\.\d+)?)s", error_str)
                         if delay_match:
-                            wait_s = float(delay_match.group(1)) + 1.0  # Add 1s buffer
+                            wait_s = float(delay_match.group(1)) + 1.0
                         else:
-                            # Exponential backoff with jitter: 2s, 4s, 8s... + jitter
-                            wait_s = (base_delay * (2 ** attempt)) + random.uniform(0, 1)
-                        
+                            wait_s = (base_delay * (2 ** attempt)) + 0.5
                         logger.warning(
-                            "step=gemini_call model=%s status=rate_limited wait_s=%.2f message='%s'",
-                            model_name, wait_s, message
+                            "step=openrouter_call model=%s status=rate_limited wait_s=%.2f",
+                            model_name, wait_s,
                         )
                         await asyncio.sleep(wait_s)
                         continue
                     else:
-                        logger.error("step=gemini_call model=%s status=rate_limit_exhausted", model_name)
-                        # Fallthrough to try the next model in the candidate list
-                
-                # Handle 5xx errors (Server Errors) - sometimes worth a retry
-                elif code >= 500:
-                    logger.warning("step=gemini_call model=%s status=server_error code=%s", model_name, code)
-                    await asyncio.sleep(1) # Short sleep for server hiccups
-                    continue # Retry same model
-                
-                # Handle 4xx errors (Bad Request) - Do not retry, do not switch models (usually logic error)
-                elif 400 <= code < 500:
-                    logger.error("step=gemini_call model=%s status=bad_request code=%s message=%s", model_name, code, message)
-                    raise exc # Fatal error, stop everything
+                        logger.error("step=openrouter_call model=%s status=rate_limit_exhausted", model_name)
 
-                # For other errors, log and try next model
-                logger.warning("step=gemini_call model=%s status=api_error_next_model code=%s", model_name, code)
+                elif "5" in error_str or "server error" in error_str:
+                    logger.warning("step=openrouter_call model=%s status=server_error", model_name)
+                    await asyncio.sleep(1)
+                    continue
+
+                else:
+                    logger.warning(
+                        "step=openrouter_call model=%s status=api_error error=%s",
+                        model_name, str(exc),
+                    )
+
                 break
-            
-            except Exception as exc:
-                last_error = exc
-                logger.warning("step=gemini_call model=%s status=unexpected_error error=%s", model_name, str(exc))
-                break # Try next model
 
     if last_error:
         raise last_error
 
-    raise RuntimeError("Gemini call failed: No models available or global timeout exceeded")
+    raise RuntimeError("OpenRouter call failed: all models exhausted or global timeout exceeded")
 
 
-async def identify_vendor(image: Any, *, timeout_s: float = 60.0) -> VendorIdentification:
+async def identify_vendor(images: Any, *, timeout_s: float = 60.0) -> VendorIdentification:
     settings = get_settings()
     prompt = "\n".join(
         [
@@ -344,14 +287,14 @@ async def identify_vendor(image: Any, *, timeout_s: float = 60.0) -> VendorIdent
     payload = await _generate_json(
         settings=settings,
         prompt=prompt,
-        images=image,
+        images=images,
         response_model=VendorIdentification,
         timeout_s=timeout_s,
     )
     return VendorIdentification.model_validate(payload)
 
 
-async def discover_schema(image: Any, *, timeout_s: float = 90.0) -> RegistrySchema:
+async def discover_schema(images: Any, *, timeout_s: float = 90.0) -> RegistrySchema:
     settings = get_settings()
     prompt = "\n".join(
         [
@@ -366,7 +309,7 @@ async def discover_schema(image: Any, *, timeout_s: float = 90.0) -> RegistrySch
     payload = await _generate_json(
         settings=settings,
         prompt=prompt,
-        images=image,
+        images=images,
         response_model=RegistrySchema,
         timeout_s=timeout_s,
     )
@@ -374,12 +317,12 @@ async def discover_schema(image: Any, *, timeout_s: float = 90.0) -> RegistrySch
 
 
 async def detect_drift(
-    image: Any,
+    images: Any,
     *,
     existing_fingerprint_hash: str,
     timeout_s: float = 60.0,
 ) -> tuple[bool, float, str]:
-    vendor = await identify_vendor(image, timeout_s=timeout_s)
+    vendor = await identify_vendor(images, timeout_s=timeout_s)
     new_fingerprint = compute_fingerprint(vendor.header_text)
     drifted = new_fingerprint != existing_fingerprint_hash
     confidence = 1.0 if not drifted else 0.0
@@ -396,15 +339,14 @@ def _registry_schema_to_pydantic_model(schema: RegistrySchema) -> type[BaseModel
         elif field_def.type == "date":
             fields[field_def.key] = (str, ...)
         elif field_def.type == "list":
-            # Structured dicts so Gemini returns tabular data (description, qty, unit_price, total) natively
-            fields[field_def.key] = (List[Dict[str, Any]], ...)
+            fields[field_def.key] = (list[LineItem], ...)
         else:
             raise ValueError(f"Unsupported field type: {field_def.type}")
-    return create_model(f"Extraction_{schema.vendor_name}_v{schema.version}", **fields)  # type: ignore[arg-type]
+    return create_model(f"Extraction_{schema.vendor_name}_v{schema.version}", **fields)
 
 
 async def extract_with_schema(
-    images: list[Any] | Any,
+    images: Any,
     schema: RegistrySchema,
     *,
     timeout_s: float = 120.0,
@@ -414,7 +356,7 @@ async def extract_with_schema(
     prompt = "\n".join(
         [
             "You are an elite enterprise OCR extraction engine.",
-            "WARNING: The attached PDF may contain MULTIPLE invoices merged into one file, OR a single multi-page invoice.",
+            "WARNING: The attached document may contain MULTIPLE invoices merged into one file, OR a single multi-page invoice.",
             "Rules:",
             "1) Return ONLY valid JSON matching the provided schema.",
             "2) For fields like 'line_items', you MUST extract ALL items across ALL pages of the document. Do not stop at page 1.",

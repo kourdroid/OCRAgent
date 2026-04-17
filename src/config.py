@@ -16,9 +16,8 @@ from src.logging_setup import setup_logging
 
 
 class Settings(BaseModel):
-    google_api_key: str = Field(default="")
-    openrouter_api_key: str | None = None
-    model_name: str = Field(default="gemini-3-flash-preview")
+    openrouter_api_key: str = Field(default="")
+    model_name: str = Field(default="google/gemini-2.0-flash")
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     drift_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
 
@@ -50,9 +49,8 @@ class Settings(BaseModel):
     def from_env(cls) -> "Settings":
         load_dotenv()
         return cls(
-            google_api_key=os.getenv("GOOGLE_API_KEY", ""),
-            openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
-            model_name=os.getenv("MODEL_NAME", "gemini-3-flash-preview"),
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
+            model_name=os.getenv("MODEL_NAME", "google/gemini-2.0-flash"),
             temperature=float(os.getenv("TEMPERATURE", "0.1")),
             drift_threshold=float(os.getenv("DRIFT_THRESHOLD", "0.8")),
             database_url=os.getenv("DATABASE_URL"),

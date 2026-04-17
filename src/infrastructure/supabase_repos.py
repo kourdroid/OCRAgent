@@ -53,6 +53,26 @@ class SupabaseRegistryRepository:
         finally:
             await conn.close()
 
+    async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]:
+        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
+        try:
+            rows = await conn.fetch(
+                "SELECT * FROM erp_po_lines WHERE po_number = $1", po_number
+            )
+            return [dict(r) for r in rows]
+        finally:
+            await conn.close()
+
+    async def get_goods_receipts(self, po_number: str) -> list[dict[str, Any]]:
+        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
+        try:
+            rows = await conn.fetch(
+                "SELECT * FROM erp_goods_receipts WHERE po_number = $1", po_number
+            )
+            return [dict(r) for r in rows]
+        finally:
+            await conn.close()
+
 
 class SupabaseJobsRepository:
     def __init__(self, conn_str: str) -> None:

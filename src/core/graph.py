@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Protocol
-
 from typing import Any, Optional, Protocol
 
 from langgraph.graph import END, START, StateGraph
@@ -13,13 +13,20 @@ from langgraph.types import Command
 from src.config import get_settings
 from src.core.nodes import VendorIdentification, discover_schema, extract_with_schema, identify_vendor
 from src.core.state import AgentState
+from src.plugins.supply_chain import execute_3_way_match
 from src.schemas import RegistrySchema
 
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_for_match(text: str) -> str:
+    return re.sub(r'\d+', '', re.sub(r'[\/:\-\.]+', ' ', text)).strip().lower()
+
+
 class RegistryRepository(Protocol):
     async def get_vendor_schemas(self, vendor_name: str) -> list[dict[str, Any]]: ...
+    async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]: ...
+    async def get_goods_receipts(self, po_number: str) -> list[dict[str, Any]]: ...
 
 
 class JobsRepository(Protocol):
@@ -41,16 +48,14 @@ class GraphDeps:
 
 
 def _load_document(file_path: str) -> Any:
-    # Stop using pdf2image. Read the raw bytes.
     with open(file_path, "rb") as f:
         pdf_bytes = f.read()
-    
-    # Return a Gemini Part object for the PDF
-    from google.genai import types
-    return types.Part.from_bytes(
-        data=pdf_bytes,
-        mime_type="application/pdf",
-    )
+
+    class PDFPart:
+        mime_type = "application/pdf"
+        data = pdf_bytes
+
+    return PDFPart()
 
 
 async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Command[str]:
@@ -62,7 +67,6 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
     logger.info("job=%s step=fingerprint_and_lookup status=start file=%s", job_id, file_path)
     await deps.jobs.mark_processing(job_id, None)
 
-    import difflib
     image = _load_document(file_path)
     ident: VendorIdentification = await identify_vendor(image)
 
@@ -71,22 +75,22 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
     fingerprint_hash = compute_fingerprint(ident.header_text)
     vendor_name = ident.vendor_name
 
-    # Fetch ALL registered schemas for this vendor
     registry_rows = await deps.registry.get_vendor_schemas(vendor_name)
-    
+
     best_match = None
     highest_ratio = 0.0
-    
+
+    sanitized_current = _sanitize_for_match(ident.header_text)
+
     for row in registry_rows:
         existing_text = row.get("ocr_text_cache", "")
-        # Use fuzzy string matching to check if the header is 85%+ similar
-        ratio = difflib.SequenceMatcher(None, ident.header_text, existing_text).ratio()
+        sanitized_existing = _sanitize_for_match(existing_text)
+        ratio = difflib.SequenceMatcher(None, sanitized_current, sanitized_existing).ratio()
         if ratio > highest_ratio:
             highest_ratio = ratio
             best_match = row
 
-    if best_match and highest_ratio >= 0.85:
-        # It's the same layout (allow for minor OCR typos/date changes)
+    if best_match and highest_ratio >= 0.80:
         logger.info(
             "job=%s step=fingerprint_and_lookup registry=hit vendor=%s ratio=%.2f",
             job_id, vendor_name, highest_ratio
@@ -102,7 +106,6 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
             goto="extract",
         )
     else:
-        # Truly a new layout (Ratio < 0.85)
         logger.info(
             "job=%s step=fingerprint_and_lookup registry=miss vendor=%s ratio=%.2f",
             job_id, vendor_name, highest_ratio
@@ -186,7 +189,64 @@ async def _node_extract(state: AgentState, deps: GraphDeps) -> Command[str]:
 
     await deps.jobs.mark_completed(job_id, vendor_name, extracted)
     logger.info("job=%s step=extract status=done keys=%s", job_id, sorted(list(extracted.keys())))
-    return Command(update={"final_output": extracted}, goto="deliver_webhook")
+    return Command(update={"final_output": extracted}, goto="reconcile")
+
+
+async def _node_reconcile(state: AgentState, deps: GraphDeps) -> Command[str]:
+    job_id = state.get("job_id")
+    extracted_data = state.get("final_output", {})
+
+    logger.info("job=%s step=reconcile status=start", job_id)
+
+    # 1. Parse PO number from extracted data (e.g. "CO2109-0171 / 17/09/2021" → "CO2109-0171")
+    raw_po = extracted_data.get("order_reference", "") or extracted_data.get("po_number", "") or ""
+    clean_po = raw_po.split("/")[0].strip() if raw_po else ""
+
+    if not clean_po:
+        logger.warning("job=%s step=reconcile status=skipped reason=no_po_found", job_id)
+        audit = {"status": "SKIPPED", "reason": "No PO number found in extracted data"}
+        extracted_data["audit_report"] = audit
+        return Command(
+            update={"final_output": extracted_data, "reconciliation_audit": audit},
+            goto="deliver_webhook",
+        )
+
+    # 2. Fetch ERP data via the registry repo (same connection string)
+    po_lines = await deps.registry.get_po_lines(clean_po)
+    receipt_lines = await deps.registry.get_goods_receipts(clean_po)
+
+    if not po_lines:
+        logger.warning("job=%s step=reconcile status=skipped reason=po_not_in_erp po=%s", job_id, clean_po)
+        audit = {"status": "SKIPPED", "reason": f"PO {clean_po} not found in ERP"}
+        extracted_data["audit_report"] = audit
+        return Command(
+            update={"final_output": extracted_data, "reconciliation_audit": audit},
+            goto="deliver_webhook",
+        )
+
+    # 3. Execute the deterministic 3-Way Match
+    audit_report = execute_3_way_match(
+        invoice_data=extracted_data,
+        po_lines=po_lines,
+        receipt_lines=receipt_lines,
+        price_tolerance=0.05,
+    )
+
+    logger.info(
+        "job=%s step=reconcile status=done audit_status=%s discrepancies=%d",
+        job_id, audit_report["status"], len(audit_report["discrepancies"]),
+    )
+
+    extracted_data["audit_report"] = audit_report
+
+    # Re-persist the enriched payload with the audit attached
+    vendor_name = state.get("detected_vendor")
+    await deps.jobs.mark_completed(job_id, vendor_name, extracted_data)
+
+    return Command(
+        update={"final_output": extracted_data, "reconciliation_audit": audit_report},
+        goto="deliver_webhook",
+    )
 
 
 async def _node_deliver_webhook(state: AgentState, deps: GraphDeps) -> Command[str]:
@@ -214,12 +274,16 @@ def build_graph(deps: GraphDeps, *, checkpointer: Any | None = None):
     async def extract(state: AgentState) -> Command[str]:
         return await _node_extract(state, deps)
 
+    async def reconcile(state: AgentState) -> Command[str]:
+        return await _node_reconcile(state, deps)
+
     async def deliver_webhook(state: AgentState) -> Command[str]:
         return await _node_deliver_webhook(state, deps)
 
     builder.add_node("fingerprint_and_lookup", fingerprint_and_lookup)
     builder.add_node("human_hold", human_hold)
     builder.add_node("extract", extract)
+    builder.add_node("reconcile", reconcile)
     builder.add_node("deliver_webhook", deliver_webhook)
 
     builder.add_edge(START, "fingerprint_and_lookup")
