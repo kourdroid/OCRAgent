@@ -1,50 +1,85 @@
-# Ironclad-OCR Project Analysis
+# Ironclad-OCR Codebase Analysis
 
 ## Overview
-Ironclad-OCR is an application designed to process PDF invoices from vendors using OCR (Optical Character Recognition) and AI models. It uses FastAPI for the API, Redis for queueing, Supabase for PostgreSQL database and storage, and LangGraph for managing the extraction workflow. The core functionality centers around extracting structured data from vendor invoices using Gemini models.
+Ironclad-OCR is a PDF invoice processing service built around FastAPI, Redis Streams, Supabase/Postgres, and LangGraph. The system uploads PDFs, splits merged documents, identifies vendors, discovers or reuses extraction schemas, and optionally runs deterministic ERP reconciliation before delivering results to a webhook.
 
 ## Architecture
 
-### 1. API (`src/api`)
-The FastAPI application provides three main endpoints:
-- `POST /ingest`: Uploads a PDF file, saves it to disk, creates a job record in Supabase, and enqueues a job in Redis.
-- `GET /jobs/{job_id}`: Retrieves the status of a specific processing job from Supabase.
-- `POST /approve`: Receives user approval for a proposed schema for a vendor, updates the registry, and requeues the job.
-- `GET /health`: Checks the health of Redis and Supabase.
+### API
+`src/api/routes.py` exposes:
+- `POST /ingest` for PDF upload, local storage, splitting, job creation, and queueing.
+- `GET /jobs/{job_id}` for job status lookup.
+- `POST /approve` for human approval of proposed schemas and job requeueing.
+- `GET /health` for Redis and database checks.
 
-### 2. Worker (`src/worker`)
-A standalone Python worker process (`worker.py`) that reads messages from the Redis queue. For each message, it executes a LangGraph workflow (`_process_message`) to handle the PDF document.
+### Worker
+`src/worker/worker.py` runs a long-lived Redis consumer loop. It loads the LangGraph workflow from `src/core/graph.py`, processes each message, and ACKs or fails jobs based on execution outcome.
 
-### 3. Core Logic & AI (`src/core`)
-- **LangGraph Workflow (`graph.py`)**: Defines the state machine for processing a document:
-  1. `fingerprint_and_lookup`: Identifies the vendor and header text using Gemini, computes a fingerprint, and looks up the vendor in Supabase.
-  2. `discovery_agent`: If the vendor is new, uses Gemini to infer a schema.
-  3. `schema_evolution_agent`: If the vendor layout drifted, proposes an updated schema using Gemini.
-  4. `human_hold`: Pauses the workflow waiting for a human to approve the proposed schema.
-  5. `extract`: Extracts the fields from the invoice based on the approved schema using Gemini.
-  6. `deliver_webhook`: Sends the final extracted data to an external webhook.
-- **AI Nodes (`nodes.py`)**: Uses the Google Gemini API (`google-genai` library) to interact with LLMs. Models used include `gemini-3-flash-preview`, `gemini-2.0-flash`, and `gemini-2.0-flash-lite`. It includes rate limiting and retry logic for the Gemini API.
+### Core Workflow
+`src/core/graph.py` defines the orchestration flow:
+- `fingerprint_and_lookup` identifies the vendor and tries to match an existing schema.
+- `discovery_agent` proposes a schema for unknown vendors.
+- `human_hold` persists a proposed schema and stops for approval.
+- `extract` runs schema-based extraction.
+- `reconcile` compares extracted invoice data against ERP PO and receipt data.
+- `deliver_webhook` sends the final payload outward.
 
-### 4. Infrastructure (`src/infrastructure`)
-- **Redis Queue (`redis_queue.py`)**: Handles the asynchronous queueing of jobs.
-- **Supabase Repositories (`supabase_repos.py`)**: Manages interactions with Supabase:
-  - `SupabaseRegistryRepository`: Manages the `document_registry` table (vendor schemas).
-  - `SupabaseJobsRepository`: Manages the `processing_jobs` table (job state tracking).
-- **Webhook Client (`webhook_client.py`)**: Handles delivering the final extracted payload.
+### AI and Schema Layer
+`src/core/nodes.py` uses OpenRouter through `openai.AsyncOpenAI` to:
+- identify vendors,
+- discover schemas,
+- detect drift,
+- extract structured data with dynamic Pydantic models.
 
-## Technologies Used
-- **Python 3.11/3.12**
-- **FastAPI / Uvicorn** for the web API
-- **Redis** for asynchronous message queueing
-- **Supabase** as the database (PostgreSQL)
-- **LangGraph** to build the agent workflow
-- **Google GenAI (Gemini)** for text extraction and schema discovery
-- **pdf2image & poppler** for converting PDFs to images
-- **Pydantic** for schema validation and dynamic model creation
-- **Pytest** for testing
+`src/schemas.py` defines the invoice and registry schema models.
 
-## Docker Environment
-The project is containerized using Docker, with a `docker-compose.yml` defining an API service, a worker service, and a Redis instance. Both services require environment variables like `GOOGLE_API_KEY`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`.
+### Infrastructure
+- `src/infrastructure/redis_queue.py` wraps Redis Streams.
+- `src/infrastructure/supabase_repos.py` wraps Postgres access for jobs, schemas, and ERP tables.
+- `src/infrastructure/webhook_client.py` posts completed payloads to an external webhook.
+- `src/plugins/supply_chain.py` contains deterministic 3-way match logic.
 
-## Tests
-A test suite is available under `tests/` and uses `pytest` and `pytest-asyncio`. The tests currently pass when dependencies are properly installed.
+## Key Observations
+
+### Strengths
+- Clear separation between API, worker, workflow, persistence, and plugin logic.
+- Human-in-the-loop schema onboarding is built into the workflow.
+- Deterministic reconciliation is isolated from the LLM path.
+- Pydantic is used for runtime validation and dynamic schema shaping.
+
+### Risks and Gaps
+1. Redis retry handling is incomplete. The worker leaves transient failures unacked, but the queue reader only consumes `>` messages from `XREADGROUP`, which does not re-deliver pending entries automatically.
+2. Drift handling appears partially wired. `detect_drift` and `schema_evolution_agent` exist, but the active graph path does not route through them.
+3. The test suite is stale. Several tests still reference removed config fields and old helper functions.
+4. Local validation is blocked by missing `asyncpg` in the current environment.
+5. The API has no auth layer, so upload, approve, and status endpoints are open if the service is exposed.
+6. Database access opens a fresh connection per repository call instead of using pooling.
+7. The Redis consumer name is hardcoded, which makes scaling multiple workers unsafe.
+8. `ApproveRequest.schema_definition` is only typed as `dict`, so malformed schemas can enter the registry.
+9. Webhook delivery does not check non-2xx responses.
+10. ERP tables lack indexes on `po_number`, which will hurt reconciliation as data grows.
+
+## Data Flow
+1. Upload PDF to `/ingest`.
+2. Save file to `data/uploads`.
+3. Split multi-invoice PDFs into chunks.
+4. Create one job row per split file.
+5. Enqueue each job to Redis Streams.
+6. Worker consumes the message and runs vendor detection.
+7. Known vendor: extract immediately.
+8. Unknown vendor: discover schema and wait for approval.
+9. On approval, schema is stored and the job is requeued.
+10. After extraction, the payload is reconciled and sent to the webhook.
+
+## Test State
+- Full `pytest` currently fails during import because `asyncpg` is missing locally.
+- Lightweight tests show partial success, but one graph test fails because it references a removed helper.
+
+## Recommended Next Steps
+1. Add Redis pending-message recovery or claim logic.
+2. Wire drift detection into the active graph.
+3. Update stale tests to the current code contracts.
+4. Add auth for public endpoints.
+5. Introduce DB pooling and configurable Redis consumer names.
+6. Validate schema approval payloads with Pydantic.
+7. Refresh docs and compose defaults to match current OpenRouter-based behavior.

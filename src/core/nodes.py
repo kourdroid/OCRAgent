@@ -7,7 +7,6 @@ import hashlib
 import io
 import json
 import logging
-import random
 import re
 import time
 from typing import Any
@@ -314,19 +313,6 @@ async def discover_schema(images: Any, *, timeout_s: float = 90.0) -> RegistrySc
         timeout_s=timeout_s,
     )
     return RegistrySchema.model_validate(payload)
-
-
-async def detect_drift(
-    images: Any,
-    *,
-    existing_fingerprint_hash: str,
-    timeout_s: float = 60.0,
-) -> tuple[bool, float, str]:
-    vendor = await identify_vendor(images, timeout_s=timeout_s)
-    new_fingerprint = compute_fingerprint(vendor.header_text)
-    drifted = new_fingerprint != existing_fingerprint_hash
-    confidence = 1.0 if not drifted else 0.0
-    return drifted, confidence, new_fingerprint
 
 
 def _registry_schema_to_pydantic_model(schema: RegistrySchema) -> type[BaseModel]:

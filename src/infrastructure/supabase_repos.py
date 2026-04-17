@@ -7,16 +7,71 @@ from typing import Any, Optional
 
 import asyncpg
 
-from src.config import Settings
+
+_shared_pools: dict[str, asyncpg.Pool] = {}
+_pool_lock: asyncio.Lock | None = None
 
 
-class SupabaseRegistryRepository:
-    def __init__(self, conn_str: str) -> None:
-        self.conn_str = conn_str
+async def _get_pool_lock() -> asyncio.Lock:
+    global _pool_lock
+    if _pool_lock is None:
+        _pool_lock = asyncio.Lock()
+    return _pool_lock
+
+
+async def get_connection_pool(
+    conn_str: str,
+    *,
+    min_size: int = 1,
+    max_size: int = 10,
+) -> asyncpg.Pool:
+    pool = _shared_pools.get(conn_str)
+    if pool is not None:
+        return pool
+
+    lock = await _get_pool_lock()
+    async with lock:
+        pool = _shared_pools.get(conn_str)
+        if pool is not None:
+            return pool
+
+        pool = await asyncpg.create_pool(
+            dsn=conn_str,
+            min_size=min_size,
+            max_size=max_size,
+            statement_cache_size=0,
+        )
+        _shared_pools[conn_str] = pool
+        return pool
+
+
+async def close_connection_pool(conn_str: str) -> None:
+    pool = _shared_pools.pop(conn_str, None)
+    if pool is not None:
+        await pool.close()
+
+
+class _BaseRepository:
+    def __init__(self, db: str | asyncpg.Pool) -> None:
+        self._conn_str = db if isinstance(db, str) else None
+        self._pool = db if isinstance(db, asyncpg.Pool) else None
+
+    async def _get_pool(self) -> asyncpg.Pool:
+        if self._pool is not None:
+            return self._pool
+        if not self._conn_str:
+            raise RuntimeError("Database pool is not configured")
+        self._pool = await get_connection_pool(self._conn_str)
+        return self._pool
+
+
+class SupabaseRegistryRepository(_BaseRepository):
+    def __init__(self, db: str | asyncpg.Pool) -> None:
+        super().__init__(db)
 
     async def get_vendor_schemas(self, vendor_name: str) -> list[dict[str, Any]]:
-        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
-        try:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT * FROM document_registry WHERE vendor_name = $1", vendor_name
             )
@@ -27,12 +82,10 @@ class SupabaseRegistryRepository:
                     data["schema_definition"] = json.loads(data["schema_definition"])
                 result.append(data)
             return result
-        finally:
-            await conn.close()
 
     async def upsert_schema(self, vendor_name: str, fingerprint_hash: str, ocr_text_cache: str, schema_definition: dict[str, Any]) -> None:
-        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
-        try:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO document_registry (vendor_name, fingerprint_hash, ocr_text_cache, schema_definition, is_active, created_at)
@@ -50,37 +103,31 @@ class SupabaseRegistryRepository:
                 True,
                 datetime.now(timezone.utc)
             )
-        finally:
-            await conn.close()
 
     async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]:
-        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
-        try:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT * FROM erp_po_lines WHERE po_number = $1", po_number
             )
             return [dict(r) for r in rows]
-        finally:
-            await conn.close()
 
     async def get_goods_receipts(self, po_number: str) -> list[dict[str, Any]]:
-        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
-        try:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT * FROM erp_goods_receipts WHERE po_number = $1", po_number
             )
             return [dict(r) for r in rows]
-        finally:
-            await conn.close()
 
 
-class SupabaseJobsRepository:
-    def __init__(self, conn_str: str) -> None:
-        self.conn_str = conn_str
+class SupabaseJobsRepository(_BaseRepository):
+    def __init__(self, db: str | asyncpg.Pool) -> None:
+        super().__init__(db)
 
     async def create_job(self, *, job_id: str, file_url: str) -> None:
-        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
-        try:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO processing_jobs (job_id, status, file_url, created_at, updated_at)
@@ -92,22 +139,18 @@ class SupabaseJobsRepository:
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             )
-        finally:
-            await conn.close()
 
     async def get_file_url(self, job_id: str) -> Optional[str]:
-        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
-        try:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
             url = await conn.fetchval(
                 "SELECT file_url FROM processing_jobs WHERE job_id = $1", job_id
             )
             return url
-        finally:
-            await conn.close()
 
     async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
-        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
-        try:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM processing_jobs WHERE job_id = $1", job_id
             )
@@ -117,8 +160,6 @@ class SupabaseJobsRepository:
             if data.get("extracted_data") and isinstance(data["extracted_data"], str):
                 data["extracted_data"] = json.loads(data["extracted_data"])
             return data
-        finally:
-            await conn.close()
 
     async def mark_processing(self, job_id: str, vendor_detected: Optional[str]) -> None:
         await self._update_job(job_id, {"status": "PROCESSING", "vendor_detected": vendor_detected})
@@ -139,26 +180,36 @@ class SupabaseJobsRepository:
     async def mark_failed(self, job_id: str, error_log: str) -> None:
         await self._update_job(job_id, {"status": "FAILED", "error_log": error_log})
 
+    async def mark_delivery_failed(
+        self,
+        job_id: str,
+        error_log: str,
+        extracted_data: dict[str, Any] | None = None,
+    ) -> None:
+        patch: dict[str, Any] = {
+            "status": "DELIVERY_FAILED",
+            "error_log": error_log,
+        }
+        if extracted_data is not None:
+            patch["extracted_data"] = json.dumps(extracted_data)
+        await self._update_job(job_id, patch)
+
     async def mark_requeued(self, job_id: str, vendor_detected: Optional[str]) -> None:
         await self._update_job(job_id, {"status": "PENDING", "vendor_detected": vendor_detected})
 
     async def _update_job(self, job_id: str, patch: dict[str, Any]) -> None:
         patch["updated_at"] = datetime.now(timezone.utc)
-        
-        conn = await asyncpg.connect(self.conn_str, statement_cache_size=0)
-        try:
+
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
             set_clauses = []
             values = []
-            
+
             for idx, (k, v) in enumerate(patch.items(), start=1):
                 set_clauses.append(f"{k} = ${idx}")
                 values.append(v)
-                
+
             values.append(job_id)
             query = f"UPDATE processing_jobs SET {', '.join(set_clauses)} WHERE job_id = ${len(values)}"
-            
+
             await conn.execute(query, *values)
-        finally:
-            await conn.close()
-
-

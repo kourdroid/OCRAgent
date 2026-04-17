@@ -4,14 +4,12 @@ import difflib
 import logging
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Optional, Protocol
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from src.config import get_settings
-from src.core.nodes import VendorIdentification, discover_schema, extract_with_schema, identify_vendor
+from src.core.nodes import VendorIdentification, compute_fingerprint, discover_schema, extract_with_schema, identify_vendor
 from src.core.state import AgentState
 from src.plugins.supply_chain import execute_3_way_match
 from src.schemas import RegistrySchema
@@ -69,8 +67,6 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
 
     image = _load_document(file_path)
     ident: VendorIdentification = await identify_vendor(image)
-
-    from src.core.nodes import compute_fingerprint
 
     fingerprint_hash = compute_fingerprint(ident.header_text)
     vendor_name = ident.vendor_name
@@ -131,27 +127,6 @@ async def _node_discovery_agent(state: AgentState) -> Command[str]:
     image = _load_document(file_path)
     schema = await discover_schema(image)
     logger.info("job=%s step=discovery_agent status=done vendor=%s version=%s", job_id, schema.vendor_name, schema.version)
-    return Command(update={"proposed_schema": schema.model_dump()}, goto="human_hold")
-
-
-async def _node_schema_evolution_agent(state: AgentState) -> Command[str]:
-    job_id = state.get("job_id", "?")
-    file_path = state.get("file_path")
-    if not file_path:
-        return Command(update={"error": "Missing file_path"}, goto=END)
-
-    logger.info("job=%s step=schema_evolution_agent status=start", job_id)
-    image = _load_document(file_path)
-    schema = await discover_schema(image)
-
-    vendor_name = state.get("detected_vendor")
-    current_schema_dict = state.get("current_schema") or {}
-    try:
-        current_schema = RegistrySchema.model_validate(current_schema_dict)
-        schema = schema.model_copy(update={"vendor_name": vendor_name or schema.vendor_name, "version": current_schema.version + 1})
-    except Exception:
-        schema = schema.model_copy(update={"vendor_name": vendor_name or schema.vendor_name})
-
     return Command(update={"proposed_schema": schema.model_dump()}, goto="human_hold")
 
 
@@ -266,7 +241,6 @@ def build_graph(deps: GraphDeps, *, checkpointer: Any | None = None):
         return await _node_fingerprint_and_lookup(state, deps)
 
     builder.add_node("discovery_agent", _node_discovery_agent)
-    builder.add_node("schema_evolution_agent", _node_schema_evolution_agent)
 
     async def human_hold(state: AgentState) -> Command[str]:
         return await _node_human_hold(state, deps)
