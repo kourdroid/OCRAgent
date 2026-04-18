@@ -1,65 +1,204 @@
-import Image from "next/image";
+"use client"
 
-export default function Home() {
+import { MagnifyingGlassIcon, UploadSimpleIcon, DotsThreeIcon } from "@phosphor-icons/react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+
+const invoices = [
+  {
+    id: "FA2109-0333",
+    vendor: "LABEL TECH",
+    type: "INVOICE",
+    amount: "960.22 MAD",
+    date: "2021-09-17",
+    status: "BLOCKED_DISCREPANCY",
+  },
+  {
+    id: "FA2109-0334",
+    vendor: "DHL Express",
+    type: "INVOICE",
+    amount: "1,245.80 MAD",
+    date: "2021-09-18",
+    status: "CLEARED",
+  },
+  {
+    id: "FA2109-0335",
+    vendor: "Maroc Telecom",
+    type: "INVOICE",
+    amount: "3,892.00 MAD",
+    date: "2021-09-19",
+    status: "WAITING_WAREHOUSE",
+  },
+  {
+    id: "FA2109-0336",
+    vendor: "Ooredoo",
+    type: "INVOICE",
+    amount: "756.45 MAD",
+    date: "2021-09-20",
+    status: "CLEARED",
+  },
+  {
+    id: "FA2109-0337",
+    vendor: "Air Liquide",
+    type: "INVOICE",
+    amount: "12,450.00 MAD",
+    date: "2021-09-21",
+    status: "BLOCKED_DISCREPANCY",
+  },
+]
+
+const statusConfig = {
+  CLEARED: {
+    label: "Cleared",
+    className: "bg-emerald-950/50 text-emerald-400 border-emerald-800/50",
+  },
+  BLOCKED_DISCREPANCY: {
+    label: "Blocked",
+    className: "bg-red-950/50 text-red-400 border-red-800/50",
+  },
+  WAITING_WAREHOUSE: {
+    label: "Awaiting",
+    className: "bg-amber-950/50 text-amber-400 border-amber-800/50",
+  },
+}
+
+export default function CommandCenterPage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="mx-auto max-w-7xl px-6 py-8">
+        <header className="mb-8 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800">
+              <div className="h-4 w-4 rounded-sm bg-gradient-to-br from-zinc-100 to-zinc-400" />
+            </div>
+            <h1 className="text-xl font-semibold tracking-tight">Ironclad Command</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="relative w-80">
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+              <Input
+                placeholder="Search POs, Invoices..."
+                className="h-10 border-zinc-800 bg-zinc-900/50 pl-10 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-700 focus:ring-zinc-700"
+              />
+            </div>
+            <Button className="h-10 gap-2 bg-zinc-100 text-zinc-950 hover:bg-zinc-200">
+              <UploadSimpleIcon className="h-4 w-4" weight="bold" />
+              <span className="text-sm font-medium">Upload Documents</span>
+            </Button>
+          </div>
+        </header>
+
+        <div className="mb-6">
+          <Tabs defaultValue="action" className="w-full">
+            <TabsList className="h-auto gap-1 border-b border-zinc-800 bg-transparent p-0">
+              <TabsTrigger
+                value="action"
+                className="relative h-9 rounded-none border-b-2 border-transparent px-4 text-sm font-medium text-zinc-400 data-[state=active]:border-zinc-100 data-[state=active]:text-zinc-100 data-[state=active]:shadow-none"
+              >
+                Action Required
+              </TabsTrigger>
+              <TabsTrigger
+                value="warehouse"
+                className="relative h-9 rounded-none border-b-2 border-transparent px-4 text-sm font-medium text-zinc-400 data-[state=active]:border-zinc-100 data-[state=active]:text-zinc-100 data-[state=active]:shadow-none"
+              >
+                Awaiting Warehouse
+              </TabsTrigger>
+              <TabsTrigger
+                value="cleared"
+                className="relative h-9 rounded-none border-b-2 border-transparent px-4 text-sm font-medium text-zinc-400 data-[state=active]:border-zinc-100 data-[state=active]:text-zinc-100 data-[state=active]:shadow-none"
+              >
+                Cleared
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="overflow-hidden rounded-lg border border-zinc-800">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-zinc-800 hover:bg-transparent">
+                <TableHead className="h-11 border-b border-zinc-800 bg-zinc-900/30 px-4 text-xs font-medium uppercase tracking-wider text-zinc-500">
+                  ID
+                </TableHead>
+                <TableHead className="h-11 border-b border-zinc-800 bg-zinc-900/30 px-4 text-xs font-medium uppercase tracking-wider text-zinc-500">
+                  Vendor
+                </TableHead>
+                <TableHead className="h-11 border-b border-zinc-800 bg-zinc-900/30 px-4 text-xs font-medium uppercase tracking-wider text-zinc-500">
+                  Type
+                </TableHead>
+                <TableHead className="h-11 border-b border-zinc-800 bg-zinc-900/30 px-4 text-right text-xs font-medium uppercase tracking-wider text-zinc-500">
+                  Amount
+                </TableHead>
+                <TableHead className="h-11 border-b border-zinc-800 bg-zinc-900/30 px-4 text-xs font-medium uppercase tracking-wider text-zinc-500">
+                  Date
+                </TableHead>
+                <TableHead className="h-11 border-b border-zinc-800 bg-zinc-900/30 px-4 text-xs font-medium uppercase tracking-wider text-zinc-500">
+                  Status
+                </TableHead>
+                <TableHead className="h-11 border-b border-zinc-800 bg-zinc-900/30 px-4 text-right text-xs font-medium uppercase tracking-wider text-zinc-500">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {invoices.map((invoice) => {
+                const config = statusConfig[invoice.status as keyof typeof statusConfig]
+                return (
+                  <TableRow
+                    key={invoice.id}
+                    className="border-zinc-800/50 transition-colors hover:bg-zinc-900/30 data-[state=selected]:bg-zinc-900/50"
+                  >
+                    <TableCell className="px-4 py-3 font-mono text-sm text-zinc-300">
+                      {invoice.id}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-sm text-zinc-100">
+                      {invoice.vendor}
+                    </TableCell>
+                    <TableCell className="px-4 py-3">
+                      <span className="inline-flex items-center rounded-md bg-zinc-800/50 px-2 py-0.5 text-xs font-medium text-zinc-400">
+                        {invoice.type}
+                      </span>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-right font-mono text-sm text-zinc-100">
+                      {invoice.amount}
+                    </TableCell>
+                    <TableCell className="px-4 py-3 font-mono text-sm text-zinc-400">
+                      {invoice.date}
+                    </TableCell>
+                    <TableCell className="px-4 py-3">
+                      <Badge
+                        variant="outline"
+                        className={`rounded-md border px-2 py-0.5 text-xs font-medium ${config.className}`}
+                      >
+                        {config.label}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="px-4 py-3 text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+                      >
+                        <DotsThreeIcon className="h-4 w-4" weight="bold" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
         </div>
-      </main>
+      </div>
     </div>
-  );
+  )
 }
