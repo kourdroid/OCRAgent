@@ -1,9 +1,11 @@
 "use client"
 
+import { useRouter } from "next/navigation"
 import { MagnifyingGlassIcon, UploadSimpleIcon, DotsThreeIcon } from "@phosphor-icons/react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Table,
@@ -73,11 +75,14 @@ const statusConfig = {
 }
 
 export default function CommandCenterPage() {
+  const router = useRouter()
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="mx-auto max-w-7xl px-6 py-8">
+      <div className="mx-auto max-w-7xl px-6 py-8 w-full">
         <header className="mb-8 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            <SidebarTrigger className="-ml-2 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100" />
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800">
               <div className="h-4 w-4 rounded-sm bg-gradient-to-br from-zinc-100 to-zinc-400" />
             </div>
@@ -156,7 +161,8 @@ export default function CommandCenterPage() {
                 return (
                   <TableRow
                     key={invoice.id}
-                    className="border-zinc-800/50 transition-colors hover:bg-zinc-900/30 data-[state=selected]:bg-zinc-900/50"
+                    onClick={() => router.push(`/invoices/${invoice.id}`)}
+                    className="cursor-pointer border-zinc-800/50 transition-colors hover:bg-zinc-900/30 data-[state=selected]:bg-zinc-900/50"
                   >
                     <TableCell className="px-4 py-3 font-mono text-sm text-zinc-300">
                       {invoice.id}
@@ -188,6 +194,10 @@ export default function CommandCenterPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          router.push(`/validation/${invoice.vendor.toLowerCase().replace(/\s+/g, '-')}`)
+                        }}
                       >
                         <DotsThreeIcon className="h-4 w-4" weight="bold" />
                       </Button>
