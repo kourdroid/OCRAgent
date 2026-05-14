@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import asyncpg
 
 
+logger = logging.getLogger(__name__)
+
 _shared_pools: dict[str, asyncpg.Pool] = {}
 _pool_lock: asyncio.Lock | None = None
+_POOL_CONNECT_ATTEMPTS = 5
+_POOL_CONNECT_INITIAL_DELAY_S = 1.0
 
 
 async def _get_pool_lock() -> asyncio.Lock:
@@ -35,12 +40,31 @@ async def get_connection_pool(
         if pool is not None:
             return pool
 
-        pool = await asyncpg.create_pool(
-            dsn=conn_str,
-            min_size=min_size,
-            max_size=max_size,
-            statement_cache_size=0,
-        )
+        last_error: Exception | None = None
+        for attempt in range(1, _POOL_CONNECT_ATTEMPTS + 1):
+            try:
+                pool = await asyncpg.create_pool(
+                    dsn=conn_str,
+                    min_size=min_size,
+                    max_size=max_size,
+                    statement_cache_size=0,
+                )
+                break
+            except OSError as exc:
+                last_error = exc
+                if attempt >= _POOL_CONNECT_ATTEMPTS:
+                    raise
+                delay = _POOL_CONNECT_INITIAL_DELAY_S * attempt
+                logger.warning(
+                    "step=db_pool_connect status=retry attempt=%s max_attempts=%s error=%s",
+                    attempt,
+                    _POOL_CONNECT_ATTEMPTS,
+                    str(exc),
+                )
+                await asyncio.sleep(delay)
+        else:
+            raise RuntimeError("Database connection pool was not created") from last_error
+
         _shared_pools[conn_str] = pool
         return pool
 
@@ -138,18 +162,32 @@ class SupabaseJobsRepository(_BaseRepository):
         super().__init__(db)
 
     async def create_job(self, *, job_id: str, file_url: str) -> None:
+        await self.create_jobs_bulk([{"job_id": job_id, "file_url": file_url}])
+
+    async def create_jobs_bulk(self, jobs_data: list[dict[str, Any]]) -> None:
+        if not jobs_data:
+            return
+
+        now = datetime.now(timezone.utc)
+        records = [
+            (
+                j["job_id"],
+                "PENDING",
+                j["file_url"],
+                now,
+                now,
+            )
+            for j in jobs_data
+        ]
+
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
+            await conn.executemany(
                 """
                 INSERT INTO processing_jobs (job_id, status, file_url, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5)
                 """,
-                job_id,
-                "PENDING",
-                file_url,
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
+                records,
             )
 
     async def get_file_url(self, job_id: str) -> Optional[str]:

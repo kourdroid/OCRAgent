@@ -50,6 +50,16 @@ export interface AuditDiscrepancy {
 export interface AuditReport {
   status: "CLEARED" | "BLOCKED_DISCREPANCY" | "WAITING_WAREHOUSE" | string;
   discrepancies: AuditDiscrepancy[];
+  requires_human?: boolean;
+  confidence?: number;
+  plugin_id?: string;
+  plugin_version?: string;
+  audit_trail?: Array<{
+    step?: string;
+    message?: string;
+    evidence?: string[];
+    [key: string]: unknown;
+  }>;
   shortage_detected?: boolean;
   notification?: {
     shortage_detected: boolean;

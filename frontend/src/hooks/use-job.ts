@@ -49,7 +49,6 @@ export function useJob(jobId: string | null, pollInterval = 3000): UseJobResult 
       }
     }
 
-    setIsLoading(true);
     load();
 
     return () => {

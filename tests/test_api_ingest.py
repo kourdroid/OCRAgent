@@ -18,12 +18,20 @@ class DummyQueue:
         self.enqueued.append({"job_id": job_id, "file_path": file_path})
         return "1-0"
 
+    async def enqueue_jobs_bulk(self, jobs_data: list[dict[str, Any]]) -> list[str]:
+        for job in jobs_data:
+            self.enqueued.append({"job_id": job["job_id"], "file_path": job["file_path"]})
+        return [f"1-{i}" for i in range(len(jobs_data))]
+
     async def close(self) -> None:
         return None
 
 
 class DummyJobsRepo:
     async def create_job(self, *, job_id: str, file_url: str) -> None:
+        return None
+
+    async def create_jobs_bulk(self, jobs_data: list[dict[str, Any]]) -> None:
         return None
 
 

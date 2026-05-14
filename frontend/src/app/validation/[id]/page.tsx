@@ -14,35 +14,18 @@ import {
   WarningOctagonIcon,
   TableIcon,
   FileTextIcon,
-  CalendarBlankIcon,
-  BuildingsIcon,
-  CaretLeftIcon,
-  CaretRightIcon,
   ArrowsOutIcon,
 } from "@phosphor-icons/react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 
 import { approveSchema, getFileUrl } from "@/lib/api";
 import { useJob } from "@/hooks/use-job";
 import type { AuditDiscrepancy, ExtractedData, Job, LineItem, WaitingHumanData } from "@/lib/types";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-function isWaitingHumanData(data: unknown): data is WaitingHumanData {
-  return (
-    typeof data === "object" &&
-    data !== null &&
-    "proposed_schema" in data &&
-    typeof (data as Record<string, unknown>).proposed_schema === "object"
-  );
-}
 
 function formatValue(val: unknown): string {
   if (val === null || val === undefined) return "—";
@@ -186,7 +169,10 @@ function CompletedPanel({ data }: CompletedPanelProps) {
   const audit = data.audit_report;
   const processingNotification = data.processing_notification;
 
-  const isBlocked = audit?.status === "BLOCKED_DISCREPANCY";
+  const isBlocked = audit?.status === "BLOCKED_DISCREPANCY" || audit?.status === "WAITING_WAREHOUSE";
+  const requiresHuman = audit?.requires_human ?? isBlocked;
+  const confidenceLabel =
+    typeof audit?.confidence === "number" ? `${Math.round(audit.confidence * 100)}% confidence` : null;
 
   return (
     <div className="space-y-8 p-8">
@@ -224,6 +210,35 @@ function CompletedPanel({ data }: CompletedPanelProps) {
                   {processingNotification.title}: {processingNotification.message}
                 </p>
               )}
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Badge
+                  variant="outline"
+                  className={`rounded-md px-2 py-1 text-[11px] ${
+                    requiresHuman
+                      ? "border-amber-900/60 bg-amber-950/30 text-amber-300"
+                      : "border-emerald-900/60 bg-emerald-950/30 text-emerald-300"
+                  }`}
+                >
+                  {requiresHuman ? "Human review required" : "Auto-clear eligible"}
+                </Badge>
+                {audit.plugin_id && (
+                  <Badge
+                    variant="outline"
+                    className="rounded-md border-zinc-800 bg-zinc-900/40 px-2 py-1 text-[11px] text-zinc-300"
+                  >
+                    {audit.plugin_id}
+                    {audit.plugin_version ? ` v${audit.plugin_version}` : ""}
+                  </Badge>
+                )}
+                {confidenceLabel && (
+                  <Badge
+                    variant="outline"
+                    className="rounded-md border-zinc-800 bg-zinc-900/40 px-2 py-1 text-[11px] text-zinc-300"
+                  >
+                    {confidenceLabel}
+                  </Badge>
+                )}
+              </div>
               {isBlocked && audit.discrepancies?.length > 0 && (
                 <div className="mt-3 grid gap-3">
                   {audit.discrepancies.map((d, i) => (

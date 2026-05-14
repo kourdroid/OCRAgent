@@ -35,32 +35,32 @@ type NavItem = {
 const navItems: NavItem[] = [
   {
     title: "Command Center",
-    url: "/",
+    url: "/dashboard",
     icon: SquaresFour,
   },
   {
-    title: "Live Pipeline",
-    url: "/dashboard",
+    title: "3-Way Matching",
+    url: "/three-way",
     icon: FilePdf,
   },
   {
-    title: "Financial Audit",
-    url: "/dashboard#audit",
+    title: "Source Systems",
+    url: "/source-systems",
     icon: FileCode,
   },
   {
-    title: "Customs & Compliance",
-    url: "/dashboard#compliance",
+    title: "Human Review",
+    url: "/human-review",
     icon: ShieldCheck,
   },
   {
-    title: "Supplier Matrix",
-    url: "/dashboard#suppliers",
+    title: "Client Modules",
+    url: "/client-modules",
     icon: Buildings,
   },
   {
-    title: "System Settings",
-    url: "/dashboard#settings",
+    title: "Deployment",
+    url: "/deployment",
     icon: GearSix,
   },
 ]
@@ -70,7 +70,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   function isActive(url: string): boolean {
     if (url === "/" && pathname === "/") return true
-    if (url !== "/" && !url.includes("#") && pathname.startsWith(url)) return true
+    if (url !== "/" && pathname.startsWith(url)) return true
     return false
   }
 
@@ -82,7 +82,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </div>
         <div className="flex flex-col flex-1 truncate">
           <span className="truncate text-sm font-semibold tracking-tight text-zinc-100">Ironclad OS</span>
-          <span className="truncate text-[10px] text-zinc-500 font-mono tracking-wider">GENERAL COMMAND CENTER</span>
+          <span className="truncate text-[10px] text-zinc-500 font-mono tracking-wider">IDP DECISION ENGINE</span>
         </div>
       </SidebarHeader>
       

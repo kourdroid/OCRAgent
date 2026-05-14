@@ -136,7 +136,7 @@ export default function DocumentAuditReportPage() {
                       <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
                         <FileText className="h-3 w-3" /> Doc Type
                       </span>
-                      <span className="text-sm font-medium text-zinc-200">Déclaration d'Importation</span>
+                      <span className="text-sm font-medium text-zinc-200">Déclaration d&apos;Importation</span>
                     </div>
                     <div className="flex flex-col gap-1">
                       <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500">

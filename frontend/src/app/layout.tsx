@@ -18,8 +18,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ironclad Command",
-  description: "Enterprise AP & Supply Chain AI Command Center",
+  title: "Ironclad IDP",
+  description: "Document intelligence and decision automation for AP and supply chain workflows",
 };
 
 export default function RootLayout({

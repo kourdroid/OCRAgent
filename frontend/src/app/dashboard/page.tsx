@@ -16,14 +16,6 @@ import { UploadIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
@@ -97,39 +89,33 @@ function StatusBadge({ status }: { status: JobStatus }) {
 }
 
 // ---------------------------------------------------------------------------
-// Ingest Dialog
+// Ingest panel
 // ---------------------------------------------------------------------------
-interface IngestDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+interface IngestPanelProps {
   onSuccess: () => void;
 }
 
-function IngestDialog({ open, onOpenChange, onSuccess }: IngestDialogProps) {
+function IngestPanel({ onSuccess }: IngestPanelProps) {
   const [isDragging, setIsDragging] = React.useState(false);
   const [selectedFile, setSelectedFile] = React.useState<File | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { ingest, isUploading, error, result, reset } = useIngest();
 
-  // Reset local state when dialog opens/closes
-  React.useEffect(() => {
-    if (!open) {
-      setSelectedFile(null);
-      setIsDragging(false);
-      reset();
-    }
-  }, [open, reset]);
+  const clearDialogState = React.useCallback(() => {
+    setSelectedFile(null);
+    setIsDragging(false);
+    reset();
+  }, [reset]);
 
-  // Auto-close on success after a brief display
+  // Refresh the live table after the API returns queued jobs.
   React.useEffect(() => {
     if (result) {
       const t = setTimeout(() => {
-        onOpenChange(false);
         onSuccess();
       }, 1200);
       return () => clearTimeout(t);
     }
-  }, [result, onOpenChange, onSuccess]);
+  }, [result, onSuccess]);
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -149,19 +135,21 @@ function IngestDialog({ open, onOpenChange, onSuccess }: IngestDialogProps) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-zinc-800 bg-zinc-950/95 text-zinc-100 shadow-2xl">
-        <DialogHeader>
-          <DialogTitle className="text-base text-zinc-100">
-            Manual Ingestion
-          </DialogTitle>
-          <DialogDescription className="text-sm text-zinc-500">
-            Upload a document to route it through the Ironclad AI pipeline.
-          </DialogDescription>
-        </DialogHeader>
+    <section
+      id="ingestion"
+      className="mb-6 rounded-xl border border-zinc-800 bg-zinc-950/40 p-4 ring-1 ring-zinc-800/40"
+    >
+      <div className="mb-4 flex flex-col gap-1">
+        <h2 className="text-sm font-semibold tracking-tight text-zinc-100">
+          Document Ingestion
+        </h2>
+        <p className="text-xs leading-5 text-zinc-500">
+          Upload a PDF and route it through splitting, schema lookup, extraction, matching, and delivery.
+        </p>
+      </div>
 
-        <div className="px-5 pt-4">
-          {/* Upload zone */}
+      <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+        <div>
           <div
             role="button"
             tabIndex={0}
@@ -213,7 +201,6 @@ function IngestDialog({ open, onOpenChange, onSuccess }: IngestDialogProps) {
             )}
           </div>
 
-          {/* Error / success feedback */}
           {error && (
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-300">
               <XCircleIcon className="mt-0.5 h-4 w-4 shrink-0" weight="fill" />
@@ -229,32 +216,41 @@ function IngestDialog({ open, onOpenChange, onSuccess }: IngestDialogProps) {
           )}
         </div>
 
-        <DialogFooter className="pt-4">
-          <Button
-            variant="ghost"
-            className="text-zinc-300 hover:bg-zinc-900/60"
-            onClick={() => onOpenChange(false)}
-            disabled={isUploading}
-          >
-            Cancel
-          </Button>
-          <Button
-            className="border border-emerald-500/20 bg-zinc-100 text-zinc-950 shadow-[0_0_0_1px_rgba(16,185,129,0.12),0_0_24px_rgba(16,185,129,0.10)] hover:bg-zinc-200 disabled:opacity-50"
-            onClick={handleUpload}
-            disabled={!selectedFile || isUploading || !!result}
-          >
-            {isUploading ? (
-              <>
-                <SpinnerGapIcon className="h-4 w-4 animate-spin" />
-                <span>Uploading…</span>
-              </>
-            ) : (
-              "Upload & Process"
-            )}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div className="flex flex-col justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-900/25 p-4">
+          <div className="flex flex-col gap-2">
+            <div className="text-sm font-medium text-zinc-100">Demo path</div>
+            <p className="text-xs leading-5 text-zinc-500">
+              Use an invoice PDF to demonstrate schema discovery, human approval for new layouts,
+              and 3-way matching against ERP evidence.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              className="text-zinc-300 hover:bg-zinc-900/60"
+              onClick={clearDialogState}
+              disabled={isUploading}
+            >
+              Reset
+            </Button>
+            <Button
+              className="border border-emerald-500/20 bg-zinc-100 text-zinc-950 shadow-[0_0_0_1px_rgba(16,185,129,0.12),0_0_24px_rgba(16,185,129,0.10)] hover:bg-zinc-200 disabled:opacity-50"
+              onClick={handleUpload}
+              disabled={!selectedFile || isUploading || !!result}
+            >
+              {isUploading ? (
+                <>
+                  <SpinnerGapIcon className="h-4 w-4 animate-spin" />
+                  <span>Uploading…</span>
+                </>
+              ) : (
+                "Upload & Process"
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -277,12 +273,18 @@ function deriveDocumentType(job: Job): string {
   return "INVOICE";
 }
 
+function isBlockedByAudit(job: Job): boolean {
+  const data = job.extracted_data;
+  if (!data || typeof data !== "object" || !("audit_report" in data)) return false;
+  const status = data.audit_report?.status ?? "";
+  return status === "BLOCKED_DISCREPANCY" || status === "WAITING_WAREHOUSE";
+}
+
 // ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 export default function DashboardPage() {
   const router = useRouter();
-  const [open, setOpen] = React.useState(false);
   const { jobs, isLoading, error, refetch } = useJobs({ pollInterval: 5000 });
 
   // Derived stats
@@ -293,6 +295,7 @@ export default function DashboardPage() {
   const pendingCount = jobs.filter((j) =>
     ["PENDING", "PROCESSING"].includes(j.status),
   ).length;
+  const blockedCount = jobs.filter(isBlockedByAudit).length;
 
   return (
     <div className="min-h-screen w-full bg-zinc-950 text-zinc-100">
@@ -303,13 +306,6 @@ export default function DashboardPage() {
       </div>
 
       <div className="relative mx-auto w-full max-w-7xl px-6 py-8">
-        {/* Sidebar anchor targets */}
-        <span id="ingestion" className="sr-only" />
-        <span id="audit" className="sr-only" />
-        <span id="compliance" className="sr-only" />
-        <span id="suppliers" className="sr-only" />
-        <span id="settings" className="sr-only" />
-
         {/* Header */}
         <header className="mb-8 flex flex-col gap-5">
           <div className="flex items-center justify-between">
@@ -320,12 +316,12 @@ export default function DashboardPage() {
               </div>
               <div className="flex flex-col">
                 <h1 className="text-xl font-semibold tracking-tight">
-                  General Command Center
+                  Ironclad IDP Command Center
                 </h1>
                 <div className="flex items-center gap-2 text-[11px] text-zinc-500">
                   <span className="font-mono tracking-wider">IRONCLAD OS</span>
                   <span className="text-zinc-700">/</span>
-                  <span className="font-mono">LIVE PIPELINE</span>
+                  <span className="font-mono">DECISION PIPELINE</span>
                 </div>
               </div>
             </div>
@@ -339,14 +335,14 @@ export default function DashboardPage() {
                   {isLoading ? "—" : `${pendingCount} inflight`}
                 </span>
               </div>
-              <Button
+              <a
                 id="ingest-document-btn"
-                onClick={() => setOpen(true)}
-                className="h-10 gap-2 border border-emerald-500/30 bg-zinc-100 text-zinc-950 shadow-[0_0_0_1px_rgba(16,185,129,0.15),0_0_24px_rgba(16,185,129,0.12)] hover:bg-zinc-200 hover:shadow-[0_0_0_1px_rgba(16,185,129,0.22),0_0_30px_rgba(16,185,129,0.16)]"
+                href="#ingestion"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-zinc-100 px-3 text-sm font-medium text-zinc-950 shadow-[0_0_0_1px_rgba(16,185,129,0.15),0_0_24px_rgba(16,185,129,0.12)] transition-colors hover:bg-zinc-200 hover:shadow-[0_0_0_1px_rgba(16,185,129,0.22),0_0_30px_rgba(16,185,129,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
               >
                 <span className="font-mono text-sm">+</span>
                 <span className="text-sm font-medium">Ingest Document</span>
-              </Button>
+              </a>
             </div>
           </div>
 
@@ -389,17 +385,17 @@ export default function DashboardPage() {
 
             <Card className="bg-zinc-950/40 ring-1 ring-zinc-800/70">
               <CardHeader className="pb-0">
-                <CardTitle className="text-sm text-zinc-300">Awaiting Review</CardTitle>
+                <CardTitle className="text-sm text-zinc-300">Review Queue</CardTitle>
               </CardHeader>
               <CardContent className="flex items-end justify-between gap-6">
                 <div className="flex flex-col gap-1">
                   <div className="font-mono text-2xl font-semibold tabular-nums text-zinc-100">
                     {isLoading
                       ? "—"
-                      : jobs.filter((j) => j.status === "WAITING_HUMAN").length}{" "}
+                      : jobs.filter((j) => j.status === "WAITING_HUMAN").length + blockedCount}{" "}
                     <span className="text-sm font-medium text-amber-300">Jobs</span>
                   </div>
-                  <div className="text-xs text-zinc-500">New vendor layouts pending approval</div>
+                  <div className="text-xs text-zinc-500">Schema approvals and audit-blocked documents</div>
                 </div>
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-amber-900/60 bg-amber-950/30">
                   <ShieldWarningIcon className="h-5 w-5 text-amber-300" weight="fill" />
@@ -409,12 +405,7 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        {/* Ingest Dialog */}
-        <IngestDialog
-          open={open}
-          onOpenChange={setOpen}
-          onSuccess={refetch}
-        />
+        <IngestPanel onSuccess={refetch} />
 
         {/* Live Pipeline Table */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-950/40 ring-1 ring-zinc-800/40">

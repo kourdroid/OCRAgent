@@ -94,6 +94,7 @@ async def ingest(file: UploadFile) -> IngestResponse:
             jobs = SupabaseJobsRepository(settings.database_url)
             queue = RedisQueue.from_settings(settings)
             job_ids: list[str] = []
+            jobs_to_create: list[dict[str, str]] = []
 
             try:
                 for split_index, sp in enumerate(split_paths, start=1):
@@ -118,29 +119,33 @@ async def ingest(file: UploadFile) -> IngestResponse:
                         )
                         raise SplitEnqueueError(phase="upload", split_file=split_name, original_error=exc) from exc
 
-                    try:
-                        await jobs.create_job(job_id=sp_job_id, file_url=public_url)
-                    except Exception as exc:
-                        logger.exception(
-                            "step=ingest split_process status=failed phase=create_job split_index=%s total_splits=%s split_file=%s",
-                            split_index,
-                            len(split_paths),
-                            split_name,
-                        )
-                        raise SplitEnqueueError(phase="create_job", split_file=split_name, original_error=exc) from exc
-
-                    try:
-                        await queue.enqueue_job(job_id=sp_job_id, file_path=public_url)
-                    except Exception as exc:
-                        logger.exception(
-                            "step=ingest split_process status=failed phase=enqueue_job split_index=%s total_splits=%s split_file=%s",
-                            split_index,
-                            len(split_paths),
-                            split_name,
-                        )
-                        raise SplitEnqueueError(phase="enqueue_job", split_file=split_name, original_error=exc) from exc
-
+                    jobs_to_create.append(
+                        {
+                            "job_id": sp_job_id,
+                            "file_url": public_url,
+                            "file_path": public_url,
+                        }
+                    )
                     job_ids.append(sp_job_id)
+
+                if jobs_to_create:
+                    try:
+                        await jobs.create_jobs_bulk(jobs_to_create)
+                    except Exception as exc:
+                        logger.exception(
+                            "step=ingest split_process status=failed phase=create_jobs_bulk total_splits=%s",
+                            len(split_paths),
+                        )
+                        raise SplitEnqueueError(phase="create_jobs_bulk", split_file="all_splits", original_error=exc) from exc
+
+                    try:
+                        await queue.enqueue_jobs_bulk(jobs_to_create)
+                    except Exception as exc:
+                        logger.exception(
+                            "step=ingest split_process status=failed phase=enqueue_jobs_bulk total_splits=%s",
+                            len(split_paths),
+                        )
+                        raise SplitEnqueueError(phase="enqueue_jobs_bulk", split_file="all_splits", original_error=exc) from exc
             except Exception as exc:
                 logger.exception("step=ingest enqueue_failed count=%s", len(job_ids))
                 for jid in job_ids:

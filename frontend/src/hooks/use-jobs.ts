@@ -48,7 +48,6 @@ export function useJobs({
       }
     }
 
-    setIsLoading(true);
     load();
 
     if (pollInterval > 0) {

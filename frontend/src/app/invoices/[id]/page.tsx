@@ -6,7 +6,6 @@ import { ArrowLeftIcon, ShieldWarningIcon, CheckCircleIcon, XCircleIcon } from "
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 
 const mockLineItems = [
@@ -72,7 +71,7 @@ export default function AuditMatrixPage({ params }: { params: Promise<{ id: stri
               <p className="text-xs text-zinc-500 mt-1">Requested by Procurement</p>
             </CardHeader>
             <CardContent className="p-0">
-              {mockLineItems.map((item, idx) => (
+              {mockLineItems.map((item) => (
                 <div key={`po-${item.id}`} className="p-4 border-b border-zinc-800/50 last:border-0 hover:bg-zinc-900/40 transition-colors">
                   <div className="flex justify-between items-start mb-2">
                     <span className="text-sm font-medium">{item.description}</span>
@@ -100,7 +99,7 @@ export default function AuditMatrixPage({ params }: { params: Promise<{ id: stri
               <p className="text-xs text-zinc-500 mt-1">Received at Warehouse</p>
             </CardHeader>
             <CardContent className="p-0 relative z-10">
-              {mockLineItems.map((item, idx) => (
+              {mockLineItems.map((item) => (
                 <div key={`gr-${item.id}`} className={`p-4 border-b border-zinc-800/50 last:border-0 transition-colors ${item.isDiscrepancy ? 'bg-red-950/20' : 'hover:bg-zinc-900/40'}`}>
                   <div className="flex justify-between items-start mb-2">
                     <span className={`text-sm font-medium ${item.isDiscrepancy ? 'text-red-200' : ''}`}>{item.description}</span>
@@ -132,7 +131,7 @@ export default function AuditMatrixPage({ params }: { params: Promise<{ id: stri
               <p className="text-xs text-zinc-500 mt-1">Billed by Vendor</p>
             </CardHeader>
             <CardContent className="p-0">
-              {mockLineItems.map((item, idx) => (
+              {mockLineItems.map((item) => (
                 <div key={`inv-${item.id}`} className={`p-4 border-b border-zinc-800/50 last:border-0 transition-colors ${item.isDiscrepancy ? 'bg-zinc-900/80 border-l-[3px] border-l-red-500' : 'hover:bg-zinc-900/40'}`}>
                   <div className="flex justify-between items-start mb-2">
                     <span className="text-sm font-medium">{item.description}</span>

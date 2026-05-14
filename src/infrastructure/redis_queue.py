@@ -71,6 +71,18 @@ class RedisQueue:
         message_id = await self._client.xadd(self._stream_key, {"payload": json.dumps(payload)})
         return str(message_id)
 
+    async def enqueue_jobs_bulk(self, jobs_data: list[dict[str, Any]]) -> list[str]:
+        if not jobs_data:
+            return []
+
+        async with self._client.pipeline(transaction=False) as pipe:
+            for job in jobs_data:
+                payload = {"job_id": job["job_id"], "file_path": job["file_path"]}
+                pipe.xadd(self._stream_key, {"payload": json.dumps(payload)})
+            message_ids = await pipe.execute()
+
+        return [str(mid) for mid in message_ids]
+
     async def read_one(self, *, block_ms: int = 5000, count: int = 1) -> Optional[RedisMessage]:
         try:
             reply = await self._client.xreadgroup(
