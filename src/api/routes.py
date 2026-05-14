@@ -66,11 +66,15 @@ async def ingest(file: UploadFile) -> IngestResponse:
         job_ids: list[str] = []
 
         try:
+            jobs_to_create = []
             for sp in split_paths:
                 sp_job_id = str(uuid.uuid4())
-                await jobs.create_job(job_id=sp_job_id, file_url=sp)
-                await queue.enqueue_job(job_id=sp_job_id, file_path=sp)
+                jobs_to_create.append({"job_id": sp_job_id, "file_url": str(sp), "file_path": str(sp)})
                 job_ids.append(sp_job_id)
+
+            if jobs_to_create:
+                await jobs.create_jobs_bulk(jobs_to_create)
+                await queue.enqueue_jobs_bulk(jobs_to_create)
         except Exception as exc:
             logger.exception("step=ingest enqueue_failed count=%s", len(job_ids))
             for jid in job_ids:

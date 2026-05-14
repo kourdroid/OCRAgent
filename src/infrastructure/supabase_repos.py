@@ -126,18 +126,32 @@ class SupabaseJobsRepository(_BaseRepository):
         super().__init__(db)
 
     async def create_job(self, *, job_id: str, file_url: str) -> None:
+        await self.create_jobs_bulk([{"job_id": job_id, "file_url": file_url}])
+
+    async def create_jobs_bulk(self, jobs_data: list[dict[str, Any]]) -> None:
+        if not jobs_data:
+            return
+
+        now = datetime.now(timezone.utc)
+        records = [
+            (
+                j["job_id"],
+                "PENDING",
+                j["file_url"],
+                now,
+                now,
+            )
+            for j in jobs_data
+        ]
+
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
+            await conn.executemany(
                 """
                 INSERT INTO processing_jobs (job_id, status, file_url, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5)
                 """,
-                job_id,
-                "PENDING",
-                file_url,
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
+                records,
             )
 
     async def get_file_url(self, job_id: str) -> Optional[str]:
