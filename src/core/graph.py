@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
+import httpx
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def _sanitize_for_match(text: str) -> str:
+    if not text:
+        return ""
     return re.sub(r'\d+', '', re.sub(r'[\/:\-\.]+', ' ', text)).strip().lower()
 
 
@@ -31,8 +34,58 @@ def _extract_po_number(value: Any) -> str:
     return match.group(0).strip() if match else first_segment
 
 
+def _find_po_reference(extracted_data: dict[str, Any]) -> tuple[str, str]:
+    candidate_keys = [
+        "order_reference",
+        "po_number",
+        "purchase_order_number",
+        "purchase_order_no",
+        "purchase_order_ref",
+    ]
+
+    for key in candidate_keys:
+        raw_value = extracted_data.get(key, "")
+        clean_value = _extract_po_number(raw_value)
+        if clean_value:
+            return key, clean_value
+
+    return "", ""
+
+
+def _build_processing_notification(audit_report: dict[str, Any]) -> dict[str, Any]:
+    notification = audit_report.get("notification")
+    if isinstance(notification, dict):
+        return notification
+
+    discrepancies = audit_report.get("discrepancies") or []
+    shortage_detected = any(d.get("type") == "QUANTITY_SHORTAGE" for d in discrepancies)
+    if shortage_detected:
+        return {
+            "shortage_detected": True,
+            "severity": "warning",
+            "title": "Quantity shortage detected",
+            "message": "At least one invoice line exceeds the received quantity.",
+        }
+
+    if discrepancies:
+        return {
+            "shortage_detected": False,
+            "severity": "warning",
+            "title": "No quantity shortage detected",
+            "message": "Document is blocked by a non-shortage discrepancy.",
+        }
+
+    return {
+        "shortage_detected": False,
+        "severity": "success",
+        "title": "No quantity shortage detected",
+        "message": "Document cleared with no shortage anomaly.",
+    }
+
+
 class RegistryRepository(Protocol):
     async def get_vendor_schemas(self, vendor_name: str) -> list[dict[str, Any]]: ...
+    async def get_all_schemas(self) -> list[dict[str, Any]]: ...
     async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]: ...
     async def get_goods_receipts(self, po_number: str) -> list[dict[str, Any]]: ...
 
@@ -56,8 +109,13 @@ class GraphDeps:
 
 
 def _load_document(file_path: str) -> Any:
-    with open(file_path, "rb") as f:
-        pdf_bytes = f.read()
+    if file_path.startswith("http://") or file_path.startswith("https://"):
+        resp = httpx.get(file_path)
+        resp.raise_for_status()
+        pdf_bytes = resp.content
+    else:
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
 
     class PDFPart:
         mime_type = "application/pdf"
@@ -81,7 +139,7 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
     fingerprint_hash = compute_fingerprint(ident.header_text)
     vendor_name = ident.vendor_name
 
-    registry_rows = await deps.registry.get_vendor_schemas(vendor_name)
+    registry_rows = await deps.registry.get_all_schemas()
 
     best_match = None
     highest_ratio = 0.0
@@ -89,7 +147,7 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
     sanitized_current = _sanitize_for_match(ident.header_text)
 
     for row in registry_rows:
-        existing_text = row.get("ocr_text_cache", "")
+        existing_text = row.get("ocr_text_cache") or ""
         sanitized_existing = _sanitize_for_match(existing_text)
         ratio = difflib.SequenceMatcher(None, sanitized_current, sanitized_existing).ratio()
         if ratio > highest_ratio:
@@ -97,13 +155,14 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
             best_match = row
 
     if best_match and highest_ratio >= 0.80:
+        matched_vendor = best_match.get("vendor_name") or vendor_name
         logger.info(
             "job=%s step=fingerprint_and_lookup registry=hit vendor=%s ratio=%.2f",
-            job_id, vendor_name, highest_ratio
+            job_id, matched_vendor, highest_ratio
         )
         return Command(
             update={
-                "detected_vendor": vendor_name,
+                "detected_vendor": matched_vendor,
                 "current_schema": best_match["schema_definition"],
                 "drift_confidence": highest_ratio,
                 "fingerprint_hash": best_match.get("fingerprint_hash") or fingerprint_hash,
@@ -184,8 +243,15 @@ async def _node_reconcile(state: AgentState, deps: GraphDeps) -> Command[str]:
 
     logger.info("job=%s step=reconcile status=start", job_id)
 
-    raw_po = extracted_data.get("order_reference", "") or extracted_data.get("po_number", "") or ""
-    clean_po = _extract_po_number(raw_po)
+    po_source_key, clean_po = _find_po_reference(extracted_data)
+
+    logger.info(
+        "job=%s step=reconcile po_lookup source_key=%s available_keys=%s clean_po=%s",
+        job_id,
+        po_source_key or "missing",
+        sorted(list(extracted_data.keys())),
+        clean_po or "missing",
+    )
 
     if not clean_po:
         logger.warning("job=%s step=reconcile status=blocked reason=no_po_found", job_id)
@@ -196,10 +262,38 @@ async def _node_reconcile(state: AgentState, deps: GraphDeps) -> Command[str]:
                     "type": "UNAUTHORIZED_ITEM",
                     "item": "PO_REFERENCE",
                     "message": "No purchase order reference found in extracted invoice data.",
+                    "why": "The document could not be linked to any ERP purchase order because no PO reference was extracted.",
+                    "where": {
+                        "document": "invoice.metadata",
+                        "field": "order_reference|po_number|purchase_order_number",
+                    },
+                    "detected_from": {
+                        "sources": [
+                            "invoice.order_reference",
+                            "invoice.po_number",
+                            "invoice.purchase_order_number",
+                        ],
+                        "comparison": "po_reference_presence_check",
+                    },
+                    "anomaly": {
+                        "kind": "missing_reference",
+                        "metric": "purchase_order_reference",
+                        "expected": "A valid PO number in the extracted invoice metadata",
+                        "actual": "No PO-like value found in known PO reference fields",
+                    },
                 }
             ],
+            "shortage_detected": False,
+            "notification": {
+                "shortage_detected": False,
+                "severity": "warning",
+                "title": "No quantity shortage detected",
+                "message": "Document is blocked because no purchase order reference was found.",
+                "discrepancy_count": 1,
+            },
         }
         extracted_data["audit_report"] = audit
+        extracted_data["processing_notification"] = _build_processing_notification(audit)
         if job_id:
             await deps.jobs.mark_completed(job_id, vendor_name, extracted_data)
         return Command(
@@ -222,6 +316,7 @@ async def _node_reconcile(state: AgentState, deps: GraphDeps) -> Command[str]:
     )
 
     extracted_data["audit_report"] = audit_report
+    extracted_data["processing_notification"] = _build_processing_notification(audit_report)
 
     if job_id:
         await deps.jobs.mark_completed(job_id, vendor_name, extracted_data)

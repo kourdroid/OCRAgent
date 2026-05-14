@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import BaseModel, Field, create_model
 
 from src.config import Settings, get_settings
+from src.schemas import FieldDefinition
 from src.schemas import LineItem, RegistrySchema
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,55 @@ def get_clean_schema(pydantic_model: type[BaseModel]) -> dict[str, Any]:
     return schema
 
 
+def _ensure_required_invoice_fields(schema: RegistrySchema) -> RegistrySchema:
+    field_map = {field.key: field for field in schema.fields}
+    invoice_markers = {
+        "invoice_number",
+        "invoice_date",
+        "due_date",
+        "total_amount",
+        "subtotal_amount",
+        "tax_amount",
+        "currency",
+    }
+    is_invoice_like = any(key in field_map for key in invoice_markers)
+    if not is_invoice_like:
+        return schema
+
+    updated_fields = list(schema.fields)
+    added_keys: list[str] = []
+
+    if "purchase_order_number" not in field_map:
+        updated_fields.append(
+            FieldDefinition(
+                key="purchase_order_number",
+                type="str",
+                description="Purchase order reference associated with this invoice.",
+            )
+        )
+        added_keys.append("purchase_order_number")
+
+    if "line_items" not in field_map:
+        updated_fields.append(
+            FieldDefinition(
+                key="line_items",
+                type="list",
+                description="All invoice line items with description, quantity, unit price, and total.",
+            )
+        )
+        added_keys.append("line_items")
+
+    if added_keys:
+        logger.warning(
+            "step=schema_normalization status=augmented vendor=%s added_fields=%s",
+            schema.vendor_name,
+            added_keys,
+        )
+        return schema.model_copy(update={"fields": updated_fields})
+
+    return schema
+
+
 def _model_name_candidates(primary: str) -> list[str]:
     """
     Returns a list of model names to try in order.
@@ -104,7 +154,7 @@ def _model_name_candidates(primary: str) -> list[str]:
 def _part_to_content_dict(part: Any) -> dict[str, Any]:
     """
     Convert a google.genai.types.Part (or any object with .mime_type and .data)
-    into an OpenRouter-compatible message content dict.
+    into an OpenAI-compatible message content dict.
     """
     mime_type = getattr(part, "mime_type", "") or ""
     data_bytes = getattr(part, "data", b"") or b""
@@ -132,10 +182,10 @@ def _part_to_content_dict(part: Any) -> dict[str, Any]:
     return {"type": "text", "text": f"[Unsupported mime type: {mime_type}]"}
 
 
-def _normalize_images_for_openrouter(images: Any) -> list[dict[str, Any]]:
+def _normalize_images_for_llm(images: Any) -> list[dict[str, Any]]:
     """
     Convert a list of Parts / PIL Images / base64 strings into
-    OpenRouter-compatible content dicts.
+    OpenAI-compatible content dicts.
     """
     img_list = images if isinstance(images, list) else [images]
     result: list[dict[str, Any]] = []
@@ -166,18 +216,19 @@ async def _generate_json(
 ) -> dict[str, Any]:
     from openai import AsyncOpenAI
 
-    if not settings.openrouter_api_key:
-        raise RuntimeError("No OpenRouter API key provided. Set OPENROUTER_API_KEY in your environment.")
+    if not settings.llm_api_key:
+        raise RuntimeError("No LLM API key provided. Set LLM_API_KEY in your environment.")
 
-    client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=settings.openrouter_api_key,
-    )
+    client_kwargs: dict[str, Any] = {"api_key": settings.llm_api_key}
+    if settings.llm_base_url:
+        client_kwargs["base_url"] = settings.llm_base_url
+
+    client = AsyncOpenAI(**client_kwargs)
 
     schema_dict = get_clean_schema(response_model)
 
     content_parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    content_parts.extend(_normalize_images_for_openrouter(images))
+    content_parts.extend(_normalize_images_for_llm(images))
 
     candidates = _model_name_candidates(settings.model_name)
 
@@ -186,7 +237,7 @@ async def _generate_json(
 
     for model_name in candidates:
         if (time.monotonic() - overall_start) > timeout_s:
-            logger.error("step=openrouter_call status=global_timeout_exceeded")
+            logger.error("step=llm_call status=global_timeout_exceeded")
             break
 
         max_retries = 3
@@ -217,18 +268,18 @@ async def _generate_json(
 
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 logger.info(
-                    "step=openrouter_call model=%s status=success duration_ms=%s",
+                    "step=llm_call model=%s status=success duration_ms=%s",
                     model_name, elapsed_ms,
                 )
 
                 content = response.choices[0].message.content
                 if not content:
-                    raise RuntimeError("Empty response from OpenRouter")
+                    raise RuntimeError("Empty response from LLM")
 
                 return json.loads(content)
 
             except asyncio.TimeoutError:
-                logger.warning("step=openrouter_call model=%s status=timeout", model_name)
+                logger.warning("step=llm_call model=%s status=timeout", model_name)
                 last_error = Exception("TimeoutError")
                 break
 
@@ -244,22 +295,22 @@ async def _generate_json(
                         else:
                             wait_s = (base_delay * (2 ** attempt)) + 0.5
                         logger.warning(
-                            "step=openrouter_call model=%s status=rate_limited wait_s=%.2f",
+                            "step=llm_call model=%s status=rate_limited wait_s=%.2f",
                             model_name, wait_s,
                         )
                         await asyncio.sleep(wait_s)
                         continue
                     else:
-                        logger.error("step=openrouter_call model=%s status=rate_limit_exhausted", model_name)
+                        logger.error("step=llm_call model=%s status=rate_limit_exhausted", model_name)
 
                 elif "5" in error_str or "server error" in error_str:
-                    logger.warning("step=openrouter_call model=%s status=server_error", model_name)
+                    logger.warning("step=llm_call model=%s status=server_error", model_name)
                     await asyncio.sleep(1)
                     continue
 
                 else:
                     logger.warning(
-                        "step=openrouter_call model=%s status=api_error error=%s",
+                        "step=llm_call model=%s status=api_error error=%s",
                         model_name, str(exc),
                     )
 
@@ -268,7 +319,7 @@ async def _generate_json(
     if last_error:
         raise last_error
 
-    raise RuntimeError("OpenRouter call failed: all models exhausted or global timeout exceeded")
+    raise RuntimeError("LLM call failed: all models exhausted or global timeout exceeded")
 
 
 async def identify_vendor(images: Any, *, timeout_s: float = 60.0) -> VendorIdentification:
@@ -312,10 +363,11 @@ async def discover_schema(images: Any, *, timeout_s: float = 90.0) -> RegistrySc
         response_model=RegistrySchema,
         timeout_s=timeout_s,
     )
-    return RegistrySchema.model_validate(payload)
+    return _ensure_required_invoice_fields(RegistrySchema.model_validate(payload))
 
 
 def _registry_schema_to_pydantic_model(schema: RegistrySchema) -> type[BaseModel]:
+    schema = _ensure_required_invoice_fields(schema)
     fields: dict[str, tuple[Any, Any]] = {}
     for field_def in schema.fields:
         if field_def.type == "str":

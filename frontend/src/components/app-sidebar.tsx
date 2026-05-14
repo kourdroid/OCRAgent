@@ -9,6 +9,7 @@ import {
   GearSix,
   SquaresFour,
   ShieldCheck,
+  FilePdf,
 } from "@phosphor-icons/react"
 
 import {
@@ -24,33 +25,54 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 
-// Sample navigation data
-const navItems = [
+type NavItem = {
+  title: string;
+  url: string;
+  icon: typeof SquaresFour;
+  badge?: string;
+};
+
+const navItems: NavItem[] = [
   {
     title: "Command Center",
     url: "/",
     icon: SquaresFour,
   },
   {
-    title: "Vendor Registry",
-    url: "#",
-    icon: Buildings,
-    badge: "142",
+    title: "Live Pipeline",
+    url: "/dashboard",
+    icon: FilePdf,
   },
   {
-    title: "Extraction Schemas",
-    url: "#",
+    title: "Financial Audit",
+    url: "/dashboard#audit",
     icon: FileCode,
   },
   {
+    title: "Customs & Compliance",
+    url: "/dashboard#compliance",
+    icon: ShieldCheck,
+  },
+  {
+    title: "Supplier Matrix",
+    url: "/dashboard#suppliers",
+    icon: Buildings,
+  },
+  {
     title: "System Settings",
-    url: "#",
+    url: "/dashboard#settings",
     icon: GearSix,
   },
 ]
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const pathname = usePathname()
+
+  function isActive(url: string): boolean {
+    if (url === "/" && pathname === "/") return true
+    if (url !== "/" && !url.includes("#") && pathname.startsWith(url)) return true
+    return false
+  }
 
   return (
     <Sidebar className="border-r border-zinc-800 bg-zinc-950" {...props}>
@@ -59,8 +81,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <ShieldCheck weight="fill" className="h-4 w-4" />
         </div>
         <div className="flex flex-col flex-1 truncate">
-          <span className="truncate text-sm font-semibold tracking-tight text-zinc-100">Ironclad OCR</span>
-          <span className="truncate text-[10px] text-zinc-500 font-mono tracking-wider">v5.0 SOVEREIGN</span>
+          <span className="truncate text-sm font-semibold tracking-tight text-zinc-100">Ironclad OS</span>
+          <span className="truncate text-[10px] text-zinc-500 font-mono tracking-wider">GENERAL COMMAND CENTER</span>
         </div>
       </SidebarHeader>
       
@@ -72,17 +94,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => {
-                // simple active state check for root vs others
-                const isActive = item.url === "/" ? pathname === "/" : pathname.startsWith(item.url)
+                const active = isActive(item.url)
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton 
                       render={<Link href={item.url} />}
-                      isActive={isActive} 
+                      isActive={active} 
                       tooltip={item.title}
                       className="text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 active:bg-zinc-800/50 data-[active=true]:bg-zinc-900 data-[active=true]:text-zinc-100 font-medium transition-colors"
                     >
-                      <item.icon className="h-4 w-4 shrink-0" weight={isActive ? "fill" : "regular"} />
+                      <item.icon className="h-4 w-4 shrink-0" weight={active ? "fill" : "regular"} />
                       <span>{item.title}</span>
                       {item.badge && (
                         <span className="ml-auto bg-zinc-800 text-zinc-300 text-[10px] font-mono px-1.5 py-0.5 rounded">

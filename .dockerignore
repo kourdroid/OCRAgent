@@ -2,6 +2,7 @@ __pycache__
 .pytest_cache
 .env
 .env.example
+.env.local
 .git
 .gitignore
 venv/
@@ -12,3 +13,8 @@ data/
 *.pyo
 *.pyd
 .DS_Store
+
+# Frontend — not needed in the Python image
+frontend/
+frontend/node_modules/
+frontend/.next/

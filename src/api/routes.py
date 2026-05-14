@@ -3,26 +3,38 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 
 import aiofiles
 import asyncpg
+import tempfile
 import redis.asyncio as redis
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
 from src.core.pdf_splitter import split_pdf
 from src.infrastructure.redis_queue import RedisQueue
 from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository
+from src.infrastructure.supabase_storage import SupabaseStorage
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+class SplitEnqueueError(RuntimeError):
+    def __init__(self, *, phase: str, split_file: str, original_error: Exception) -> None:
+        self.phase = phase
+        self.split_file = split_file
+        self.original_error = original_error
+        super().__init__(f"{phase} failed for {split_file}: {original_error}")
+
+
 def _raise_if_missing_supabase_tables(exc: asyncpg.PostgresError) -> None:
     code = getattr(exc, "sqlstate", "")
-    if code != "42P01": # undefined_table
+    if code != "42P01":  # undefined_table
         return
     raise HTTPException(
         status_code=503,
@@ -40,6 +52,10 @@ class ApproveRequest(BaseModel):
     schema_definition: dict
 
 
+# ---------------------------------------------------------------------------
+# POST /ingest
+# ---------------------------------------------------------------------------
+
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest(file: UploadFile) -> IngestResponse:
     settings = get_settings()
@@ -49,44 +65,102 @@ async def ingest(file: UploadFile) -> IngestResponse:
 
     if not settings.database_url:
         raise HTTPException(status_code=500, detail="Database URL not configured")
+    if not settings.supabase_url or not settings.supabase_service_role_key:
+        raise HTTPException(status_code=500, detail="Supabase Storage not configured")
+
+    storage = SupabaseStorage(
+        settings.supabase_url,
+        settings.supabase_service_role_key,
+        timeout_s=settings.storage_upload_timeout_s,
+    )
 
     job_id = str(uuid.uuid4())
-    target_path = settings.uploads_dir / f"{job_id}.pdf"
-    target_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        content = await file.read()
-        async with aiofiles.open(target_path, "wb") as f:
-            await f.write(content)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / f"{job_id}.pdf"
+            
+            content = await file.read()
+            if not content:
+                logger.error("step=ingest status=failed reason=empty_file")
+                raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-        split_paths = split_pdf(target_path, output_dir=settings.uploads_dir)
+            logger.info("step=ingest action=save_tmp file_size=%s", len(content))
+            async with aiofiles.open(target_path, "wb") as f:
+                await f.write(content)
 
-        jobs = SupabaseJobsRepository(settings.database_url)
-        queue = RedisQueue.from_settings(settings)
-        job_ids: list[str] = []
+            split_paths = split_pdf(target_path, output_dir=Path(tmpdir))
 
-        try:
-            for sp in split_paths:
-                sp_job_id = str(uuid.uuid4())
-                await jobs.create_job(job_id=sp_job_id, file_url=sp)
-                await queue.enqueue_job(job_id=sp_job_id, file_path=sp)
-                job_ids.append(sp_job_id)
-        except Exception as exc:
-            logger.exception("step=ingest enqueue_failed count=%s", len(job_ids))
-            for jid in job_ids:
-                try:
-                    await jobs.mark_failed(jid, f"Enqueue failed: {exc}")
-                except Exception:
-                    pass
-            raise HTTPException(status_code=500, detail="Split/_enqueue failed") from exc
-        finally:
-            await queue.close()
+            jobs = SupabaseJobsRepository(settings.database_url)
+            queue = RedisQueue.from_settings(settings)
+            job_ids: list[str] = []
+
+            try:
+                for split_index, sp in enumerate(split_paths, start=1):
+                    sp_job_id = str(uuid.uuid4())
+                    split_name = Path(sp).name
+                    logger.info(
+                        "step=ingest split_process status=start split_index=%s total_splits=%s split_file=%s",
+                        split_index,
+                        len(split_paths),
+                        split_name,
+                    )
+
+                    try:
+                        file_bytes = Path(sp).read_bytes()
+                        public_url = await storage.upload(f"{sp_job_id}.pdf", file_bytes)
+                    except Exception as exc:
+                        logger.exception(
+                            "step=ingest split_process status=failed phase=upload split_index=%s total_splits=%s split_file=%s",
+                            split_index,
+                            len(split_paths),
+                            split_name,
+                        )
+                        raise SplitEnqueueError(phase="upload", split_file=split_name, original_error=exc) from exc
+
+                    try:
+                        await jobs.create_job(job_id=sp_job_id, file_url=public_url)
+                    except Exception as exc:
+                        logger.exception(
+                            "step=ingest split_process status=failed phase=create_job split_index=%s total_splits=%s split_file=%s",
+                            split_index,
+                            len(split_paths),
+                            split_name,
+                        )
+                        raise SplitEnqueueError(phase="create_job", split_file=split_name, original_error=exc) from exc
+
+                    try:
+                        await queue.enqueue_job(job_id=sp_job_id, file_path=public_url)
+                    except Exception as exc:
+                        logger.exception(
+                            "step=ingest split_process status=failed phase=enqueue_job split_index=%s total_splits=%s split_file=%s",
+                            split_index,
+                            len(split_paths),
+                            split_name,
+                        )
+                        raise SplitEnqueueError(phase="enqueue_job", split_file=split_name, original_error=exc) from exc
+
+                    job_ids.append(sp_job_id)
+            except Exception as exc:
+                logger.exception("step=ingest enqueue_failed count=%s", len(job_ids))
+                for jid in job_ids:
+                    try:
+                        await jobs.mark_failed(jid, f"Enqueue failed: {exc}")
+                    except Exception:
+                        pass
+                if isinstance(exc, SplitEnqueueError):
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            f"Split/enqueue failed during {exc.phase} for {exc.split_file}: "
+                            f"{exc.original_error}"
+                        ),
+                    ) from exc
+                raise HTTPException(status_code=500, detail=f"Split/enqueue failed: {exc}") from exc
+            finally:
+                await queue.close()
     except asyncpg.PostgresError as exc:
         logger.exception("step=ingest status=failed job_id=%s error=%s", job_id, str(exc))
-        try:
-            target_path.unlink(missing_ok=True)
-        except OSError:
-            logger.warning("step=ingest cleanup=failed file=%s", target_path)
         _raise_if_missing_supabase_tables(exc)
         raise HTTPException(status_code=502, detail="Database API error") from exc
     except HTTPException:
@@ -98,14 +172,41 @@ async def ingest(file: UploadFile) -> IngestResponse:
     return IngestResponse(job_ids=job_ids)
 
 
+# ---------------------------------------------------------------------------
+# GET /jobs  (list)
+# ---------------------------------------------------------------------------
+
+@router.get("/jobs")
+async def list_jobs(
+    status: Optional[str] = Query(default=None, description="Filter by status"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict]:
+    settings = get_settings()
+    if not settings.database_url:
+        raise HTTPException(status_code=500, detail="Database URL not configured")
+
+    jobs = SupabaseJobsRepository(settings.database_url)
+    try:
+        return await jobs.list_jobs(status=status, limit=limit, offset=offset)
+    except asyncpg.PostgresError as exc:
+        logger.exception("step=list_jobs status=failed error=%s", str(exc))
+        _raise_if_missing_supabase_tables(exc)
+        raise HTTPException(status_code=502, detail="Database API error") from exc
+
+
+# ---------------------------------------------------------------------------
+# GET /jobs/{job_id}
+# ---------------------------------------------------------------------------
+
 @router.get("/jobs/{job_id}")
 async def get_job_status(job_id: str) -> dict:
     settings = get_settings()
     if not settings.database_url:
         raise HTTPException(status_code=500, detail="Database URL not configured")
-        
+
     jobs = SupabaseJobsRepository(settings.database_url)
-    
+
     try:
         job = await jobs.get_job(job_id)
         if not job:
@@ -117,25 +218,31 @@ async def get_job_status(job_id: str) -> dict:
         raise HTTPException(status_code=502, detail="Database API error") from exc
 
 
+# ---------------------------------------------------------------------------
+# POST /approve
+# ---------------------------------------------------------------------------
+
 @router.post("/approve")
 async def approve(payload: ApproveRequest) -> dict:
     settings = get_settings()
     if not settings.database_url:
         raise HTTPException(status_code=500, detail="Database URL not configured")
-        
+
     try:
         registry = SupabaseRegistryRepository(settings.database_url)
         jobs = SupabaseJobsRepository(settings.database_url)
 
         job = await jobs.get_job(payload.job_id)
         if not job:
-             raise HTTPException(status_code=404, detail="Job not found")
+            raise HTTPException(status_code=404, detail="Job not found")
         extracted = job.get("extracted_data") or {}
         fingerprint_hash = extracted.get("fingerprint_hash")
         ocr_text_cache = extracted.get("ocr_text_cache")
 
+        vendor_name_to_save = job.get("vendor_detected") or payload.vendor_name
+
         await registry.upsert_schema(
-            vendor_name=payload.vendor_name,
+            vendor_name=vendor_name_to_save,
             fingerprint_hash=fingerprint_hash,
             ocr_text_cache=ocr_text_cache,
             schema_definition=payload.schema_definition,
@@ -158,6 +265,10 @@ async def approve(payload: ApproveRequest) -> dict:
 
     return {"status": "queued", "job_id": payload.job_id}
 
+
+# ---------------------------------------------------------------------------
+# GET /health
+# ---------------------------------------------------------------------------
 
 @router.get("/health")
 async def health() -> dict:

@@ -83,6 +83,18 @@ class SupabaseRegistryRepository(_BaseRepository):
                 result.append(data)
             return result
 
+    async def get_all_schemas(self) -> list[dict[str, Any]]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM document_registry WHERE is_active = TRUE")
+            result = []
+            for row in rows:
+                data = dict(row)
+                if data.get("schema_definition") and isinstance(data["schema_definition"], str):
+                    data["schema_definition"] = json.loads(data["schema_definition"])
+                result.append(data)
+            return result
+
     async def upsert_schema(self, vendor_name: str, fingerprint_hash: str, ocr_text_cache: str, schema_definition: dict[str, Any]) -> None:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
@@ -148,6 +160,49 @@ class SupabaseJobsRepository(_BaseRepository):
             )
             return url
 
+    async def list_jobs(
+        self,
+        *,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            if status:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM processing_jobs
+                    WHERE status = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2 OFFSET $3
+                    """,
+                    status,
+                    limit,
+                    offset,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM processing_jobs
+                    ORDER BY created_at DESC
+                    LIMIT $1 OFFSET $2
+                    """,
+                    limit,
+                    offset,
+                )
+            result = []
+            for row in rows:
+                data = dict(row)
+                if data.get("extracted_data") and isinstance(data["extracted_data"], str):
+                    data["extracted_data"] = json.loads(data["extracted_data"])
+                # Convert datetimes to ISO strings for JSON serialisation
+                for key in ("created_at", "updated_at"):
+                    if key in data and hasattr(data[key], "isoformat"):
+                        data[key] = data[key].isoformat()
+                result.append(data)
+            return result
+
     async def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
@@ -159,6 +214,9 @@ class SupabaseJobsRepository(_BaseRepository):
             data = dict(row)
             if data.get("extracted_data") and isinstance(data["extracted_data"], str):
                 data["extracted_data"] = json.loads(data["extracted_data"])
+            for key in ("created_at", "updated_at"):
+                if key in data and hasattr(data[key], "isoformat"):
+                    data[key] = data[key].isoformat()
             return data
 
     async def mark_processing(self, job_id: str, vendor_detected: Optional[str]) -> None:

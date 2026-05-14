@@ -16,15 +16,19 @@ from src.logging_setup import setup_logging
 
 
 class Settings(BaseModel):
-    openrouter_api_key: str = Field(default="")
-    model_name: str = Field(default="google/gemini-2.0-flash")
+    llm_api_key: str = Field(default="")
+    llm_base_url: str | None = Field(default=None)
+    model_name: str = Field(default="gpt-4o")
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     drift_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
 
     database_url: str | None = None
+    supabase_url: str | None = None
+    supabase_service_role_key: str | None = None
 
     redis_url: str = Field(default="redis://localhost:6379/0")
     webhook_url: str | None = None
+    storage_upload_timeout_s: float = Field(default=60.0, gt=0.0, le=300.0)
 
     data_dir: str = Field(default="./data")
     log_level: str = Field(default="INFO")
@@ -49,13 +53,17 @@ class Settings(BaseModel):
     def from_env(cls) -> "Settings":
         load_dotenv()
         return cls(
-            openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
-            model_name=os.getenv("MODEL_NAME", "google/gemini-2.0-flash"),
+            llm_api_key=os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))),
+            llm_base_url=os.getenv("LLM_BASE_URL", os.getenv("OPENAI_BASE_URL")),
+            model_name=os.getenv("MODEL_NAME", "gpt-4o"),
             temperature=float(os.getenv("TEMPERATURE", "0.1")),
             drift_threshold=float(os.getenv("DRIFT_THRESHOLD", "0.8")),
             database_url=os.getenv("DATABASE_URL"),
+            supabase_url=os.getenv("SUPABASE_URL"),
+            supabase_service_role_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
             redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
             webhook_url=os.getenv("WEBHOOK_URL"),
+            storage_upload_timeout_s=float(os.getenv("STORAGE_UPLOAD_TIMEOUT_S", "60.0")),
             data_dir=os.getenv("DATA_DIR", "./data"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )
@@ -67,8 +75,11 @@ def get_settings() -> Settings:
 
     setup_logging(level=settings.log_level)
 
-    settings.data_path.mkdir(parents=True, exist_ok=True)
-    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-    settings.output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        settings.data_path.mkdir(parents=True, exist_ok=True)
+        settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+        settings.output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
     return settings

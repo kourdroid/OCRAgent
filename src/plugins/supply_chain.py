@@ -66,6 +66,41 @@ def _find_best_match(description: str, candidates: list[dict[str, Any]]) -> dict
     return best_match if best_score >= 0.4 else None
 
 
+def _build_shortage_notification(discrepancies: list[dict[str, Any]]) -> dict[str, Any]:
+    shortage_items = [d for d in discrepancies if d.get("type") == "QUANTITY_SHORTAGE"]
+    shortage_detected = bool(shortage_items)
+    discrepancy_count = len(discrepancies)
+
+    if shortage_detected:
+        item_names = ", ".join(str(d.get("item") or "UNKNOWN_ITEM") for d in shortage_items[:3])
+        extra_count = max(len(shortage_items) - 3, 0)
+        suffix = f" (+{extra_count} more)" if extra_count else ""
+        return {
+            "shortage_detected": True,
+            "severity": "warning",
+            "title": "Quantity shortage detected",
+            "message": f"Shortage found on {len(shortage_items)} item(s): {item_names}{suffix}.",
+            "discrepancy_count": discrepancy_count,
+        }
+
+    if discrepancy_count:
+        return {
+            "shortage_detected": False,
+            "severity": "warning",
+            "title": "No quantity shortage detected",
+            "message": f"Document is blocked by {discrepancy_count} non-shortage discrepancy(s).",
+            "discrepancy_count": discrepancy_count,
+        }
+
+    return {
+        "shortage_detected": False,
+        "severity": "success",
+        "title": "No quantity shortage detected",
+        "message": "Document cleared with no shortage anomaly.",
+        "discrepancy_count": 0,
+    }
+
+
 def execute_3_way_match(
     invoice_data: dict[str, Any],
     po_lines: list[dict[str, Any]],
@@ -85,9 +120,54 @@ def execute_3_way_match(
         {"status": "CLEARED_FOR_PAYMENT" | "BLOCKED_DISCREPANCY",
          "discrepancies": [...]}
     """
+    invoice_items = invoice_data.get("line_items", [])
+    if not isinstance(invoice_items, list):
+        invoice_items = []
+
+    if not invoice_items:
+        discrepancies = [
+            {
+                "type": "MISSING_LINE_ITEMS",
+                "item": "LINE_ITEMS",
+                "message": "No invoice line items were extracted, so reconciliation could not be completed.",
+                "why": "3-way matching requires extracted invoice line items before quantity and price checks can run.",
+                "where": {
+                    "document": "invoice.metadata",
+                    "field": "line_items",
+                    "item_description": "LINE_ITEMS",
+                },
+                "detected_from": {
+                    "sources": [
+                        "invoice.line_items",
+                        "erp_po_lines",
+                        "erp_goods_receipts",
+                    ],
+                    "comparison": "reconciliation_prerequisite_check",
+                },
+                "anomaly": {
+                    "kind": "missing_input",
+                    "metric": "invoice_line_items",
+                    "expected": "One or more extracted invoice line items",
+                    "actual": "No line items extracted from the invoice",
+                },
+            }
+        ]
+        return {
+            "status": "BLOCKED_DISCREPANCY",
+            "discrepancies": discrepancies,
+            "shortage_detected": False,
+            "notification": {
+                "shortage_detected": False,
+                "severity": "warning",
+                "title": "Shortage could not be evaluated",
+                "message": "Reconciliation is blocked because no invoice line items were extracted.",
+                "discrepancy_count": 1,
+            },
+        }
+
     discrepancies: list[dict[str, Any]] = []
 
-    for inv_item in invoice_data.get("line_items", []):
+    for inv_item in invoice_items:
         desc = str(inv_item.get("description", "") or "").strip()
         inv_qty = _coerce_float(inv_item.get("quantity"))
         inv_price = _coerce_float(inv_item.get("unit_price"))
@@ -100,6 +180,25 @@ def execute_3_way_match(
                 "type": "UNAUTHORIZED_ITEM",
                 "item": desc,
                 "message": "Item billed was not on the Purchase Order.",
+                "why": "The invoice line item could not be matched to any approved PO line.",
+                "where": {
+                    "document": "invoice.line_items",
+                    "field": "description",
+                    "item_description": desc,
+                },
+                "detected_from": {
+                    "sources": [
+                        "invoice.line_items.description",
+                        "erp_po_lines.item_description",
+                    ],
+                    "comparison": "description_match",
+                },
+                "anomaly": {
+                    "kind": "missing_reference",
+                    "metric": "po_authorization",
+                    "expected": "A matching PO line",
+                    "actual": "No PO line matched this invoice item",
+                },
             })
             continue
 
@@ -114,6 +213,28 @@ def execute_3_way_match(
                     "expected": expected_price,
                     "billed": inv_price,
                     "variance_pct": round((price_diff / expected_price) * 100, 2),
+                    "message": "Invoice unit price exceeds the configured tolerance against the PO line.",
+                    "why": "The billed unit price differs from the approved purchase order price beyond tolerance.",
+                    "where": {
+                        "document": "invoice.line_items",
+                        "field": "unit_price",
+                        "item_description": desc,
+                    },
+                    "detected_from": {
+                        "sources": [
+                            "invoice.line_items.unit_price",
+                            "erp_po_lines.expected_unit_price",
+                        ],
+                        "comparison": "price_tolerance_check",
+                    },
+                    "anomaly": {
+                        "kind": "variance",
+                        "metric": "unit_price",
+                        "expected": expected_price,
+                        "actual": inv_price,
+                        "delta": round(inv_price - expected_price, 2),
+                        "variance_pct": round((price_diff / expected_price) * 100, 2),
+                    },
                 })
 
         # ── 3. Quantity match: Invoice vs Goods Receipt ──
@@ -125,9 +246,32 @@ def execute_3_way_match(
                 "received": received_qty,
                 "billed": inv_qty,
                 "shortfall": round(inv_qty - received_qty, 2),
+                "message": "Billed quantity is higher than the quantity received in goods receipt records.",
+                "why": "The invoice asks payment for more units than the warehouse confirmed as received.",
+                "where": {
+                    "document": "invoice.line_items",
+                    "field": "quantity",
+                    "item_description": desc,
+                },
+                "detected_from": {
+                    "sources": [
+                        "invoice.line_items.quantity",
+                        "erp_goods_receipts.actual_received_qty",
+                    ],
+                    "comparison": "received_quantity_check",
+                },
+                "anomaly": {
+                    "kind": "shortage",
+                    "metric": "quantity",
+                    "expected": received_qty,
+                    "actual": inv_qty,
+                    "delta": round(inv_qty - received_qty, 2),
+                },
             })
 
     status = "BLOCKED_DISCREPANCY" if discrepancies else "CLEARED_FOR_PAYMENT"
+    shortage_detected = any(d.get("type") == "QUANTITY_SHORTAGE" for d in discrepancies)
+    notification = _build_shortage_notification(discrepancies)
 
     logger.info(
         "step=3_way_match status=%s discrepancy_count=%d",
@@ -137,4 +281,6 @@ def execute_3_way_match(
     return {
         "status": status,
         "discrepancies": discrepancies,
+        "shortage_detected": shortage_detected,
+        "notification": notification,
     }
