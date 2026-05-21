@@ -66,5 +66,5 @@ def test_ingest_returns_split_phase_failure_detail(tmp_path: Path, monkeypatch) 
 
     assert resp.status_code == 500
     assert "during upload" in resp.json()["detail"]
-    assert "split_001.pdf" in resp.json()["detail"]
+    assert "multiple_splits" in resp.json()["detail"]
 
