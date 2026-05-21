@@ -23,11 +23,14 @@ class DummyQueue:
 
 
 class DummyRegistryRepo:
-    async def upsert_schema(self, vendor_name: str, schema_definition: dict[str, Any]) -> None:
+    async def upsert_schema(self, vendor_name: str, fingerprint_hash: str, ocr_text_cache: str, schema_definition: dict[str, Any]) -> None:
         return None
 
 
 class DummyJobsRepo:
+    async def get_job(self, job_id: str) -> dict[str, Any] | None:
+        return {"job_id": job_id, "extracted_data": {}}
+
     async def mark_requeued(self, job_id: str, vendor_detected: str | None) -> None:
         return None
 
@@ -38,6 +41,7 @@ class DummyJobsRepo:
 def test_approve_requeues_job(tmp_path: Path, monkeypatch) -> None:
     settings = Settings(
         google_api_key="x",
+        database_url="postgres://db",
         supabase_url="http://example",
         supabase_service_role_key="key",
         data_dir=str(tmp_path),
@@ -46,7 +50,6 @@ def test_approve_requeues_job(tmp_path: Path, monkeypatch) -> None:
     dummy_queue = DummyQueue(enqueued=[])
 
     monkeypatch.setattr("src.api.routes.get_settings", lambda: settings)
-    monkeypatch.setattr("src.api.routes.get_supabase_client", lambda _settings: object())
     monkeypatch.setattr("src.api.routes.SupabaseRegistryRepository", lambda _client: DummyRegistryRepo())
     monkeypatch.setattr("src.api.routes.SupabaseJobsRepository", lambda _client: DummyJobsRepo())
     monkeypatch.setattr("src.api.routes.RedisQueue", type("RQ", (), {"from_settings": staticmethod(lambda _s: dummy_queue)}))

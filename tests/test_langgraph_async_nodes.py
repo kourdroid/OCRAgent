@@ -13,6 +13,7 @@ from src.schemas import RegistrySchema
 
 @dataclass
 class DummyRegistry:
+    async def get_all_schemas(self) -> list[dict[str, Any]]: return []
     async def get_vendor(self, vendor_name: str) -> Optional[dict[str, Any]]:
         return None
 
@@ -48,7 +49,7 @@ async def test_graph_nodes_are_awaited(monkeypatch) -> None:
     async def fake_discover_schema(_image):
         return RegistrySchema(vendor_name="DHL_Express", fields=[], version=1)
 
-    monkeypatch.setattr("src.core.graph._load_first_page_image", lambda _p: object())
+    monkeypatch.setattr("src.core.graph._load_document", lambda _p: object())
     monkeypatch.setattr("src.core.graph.identify_vendor", fake_identify_vendor)
     monkeypatch.setattr("src.core.graph.discover_schema", fake_discover_schema)
 

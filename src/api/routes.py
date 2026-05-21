@@ -97,8 +97,11 @@ async def ingest(file: UploadFile) -> IngestResponse:
             jobs_to_create: list[dict[str, str]] = []
 
             try:
+                upload_tasks = []
+                sp_job_ids = []
                 for split_index, sp in enumerate(split_paths, start=1):
                     sp_job_id = str(uuid.uuid4())
+                    sp_job_ids.append(sp_job_id)
                     split_name = Path(sp).name
                     logger.info(
                         "step=ingest split_process status=start split_index=%s total_splits=%s split_file=%s",
@@ -106,19 +109,23 @@ async def ingest(file: UploadFile) -> IngestResponse:
                         len(split_paths),
                         split_name,
                     )
+                    file_bytes = Path(sp).read_bytes()
+                    upload_tasks.append(storage.upload(f"{sp_job_id}.pdf", file_bytes))
 
-                    try:
-                        file_bytes = Path(sp).read_bytes()
-                        public_url = await storage.upload(f"{sp_job_id}.pdf", file_bytes)
-                    except Exception as exc:
-                        logger.exception(
-                            "step=ingest split_process status=failed phase=upload split_index=%s total_splits=%s split_file=%s",
-                            split_index,
-                            len(split_paths),
-                            split_name,
-                        )
-                        raise SplitEnqueueError(phase="upload", split_file=split_name, original_error=exc) from exc
+                try:
+                    # ⚡ Bolt Optimization:
+                    # Execute all storage uploads concurrently using asyncio.gather
+                    # This replaces the N+1 sequential await calls inside the loop,
+                    # reducing total upload time from O(N) to roughly O(1) for split PDFs.
+                    public_urls = await asyncio.gather(*upload_tasks)
+                except Exception as exc:
+                    logger.exception(
+                        "step=ingest split_process status=failed phase=upload total_splits=%s",
+                        len(split_paths),
+                    )
+                    raise SplitEnqueueError(phase="upload", split_file="multiple_splits", original_error=exc) from exc
 
+                for sp_job_id, public_url in zip(sp_job_ids, public_urls):
                     jobs_to_create.append(
                         {
                             "job_id": sp_job_id,
