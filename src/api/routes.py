@@ -17,7 +17,11 @@ from pydantic import BaseModel, Field
 from src.config import get_settings
 from src.core.pdf_splitter import split_pdf
 from src.infrastructure.redis_queue import RedisQueue
-from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository
+from src.infrastructure.supabase_repos import (
+    SupabaseJobsRepository,
+    SupabaseRegistryRepository,
+    get_connection_pool,
+)
 from src.infrastructure.supabase_storage import SupabaseStorage
 
 router = APIRouter()
@@ -309,13 +313,15 @@ async def health() -> dict:
 
     async def _check_tables() -> dict[str, object]:
         try:
-            conn = await asyncpg.connect(settings.database_url, statement_cache_size=0)
-            try:
+            # ⚡ Bolt Optimization:
+            # Reusing the shared connection pool for health checks instead of opening a
+            # new connection on every request avoids the O(1) ~100-200ms latency hit
+            # of TCP/TLS handshakes and PostgreSQL authentication.
+            pool = await get_connection_pool(settings.database_url)
+            async with pool.acquire() as conn:
                 await conn.execute("SELECT job_id FROM processing_jobs LIMIT 1")
                 await conn.execute("SELECT id FROM document_registry LIMIT 1")
                 return {"ok": True}
-            finally:
-                await conn.close()
         except asyncpg.PostgresError as exc:
             code = getattr(exc, "sqlstate", "")
             return {"ok": False, "error": str(exc), "code": code}
