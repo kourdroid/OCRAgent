@@ -205,6 +205,11 @@ class SupabaseJobsRepository(_BaseRepository):
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        # ⚡ Bolt Optimization:
+        # Queries below rely on the indexes idx_processing_jobs_status_created_at
+        # and idx_processing_jobs_created_at to avoid O(N log N) full table sorts.
+        # This reduces the query time to O(LIMIT) since PostgreSQL can simply walk
+        # the B-Tree index backwards to satisfy the ORDER BY ... DESC clause.
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             if status:
