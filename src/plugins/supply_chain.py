@@ -7,6 +7,7 @@ Compares: Invoice (extracted) vs Purchase Order vs Goods Receipt.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from typing import Any
@@ -21,10 +22,23 @@ def _coerce_float(value: Any) -> float:
         return 0.0
 
 
-def _normalize_description(value: Any) -> str:
-    text = str(value or "").lower().strip()
-    text = re.sub(r"[^a-z0-9]+", " ", text)
+_NON_ALPHANUM_RE = re.compile(r"[^a-z0-9]+")
+
+# ⚡ Bolt Optimization:
+# Memoizes the normalization of item descriptions. In real-world B2B documents,
+# identical PO lines are matched repeatedly during `execute_3_way_match`.
+# Caching this O(N) regex substitution transforms O(N*M) worst-case redundant
+# string processing into O(1) hash map lookups for repeated descriptions.
+# Additionally, the regex is pre-compiled to save repetitive compilation overhead.
+@functools.lru_cache(maxsize=1024)
+def _cached_normalize(text: str) -> str:
+    text = text.lower().strip()
+    text = _NON_ALPHANUM_RE.sub(" ", text)
     return " ".join(text.split())
+
+def _normalize_description(value: Any) -> str:
+    text = str(value or "")
+    return _cached_normalize(text)
 
 
 def _match_score(left: str, right: str) -> float:

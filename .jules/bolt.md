@@ -1,3 +1,3 @@
-## 2024-11-20 - [Concurrent PDF Uploads]
-**Learning:** In backend endpoints processing multiple splits sequentially (like PDF uploads to Supabase), `await` inside a loop creates an N+1 latency bottleneck.
-**Action:** Extract the I/O-bound tasks into a list and use `await asyncio.gather(*tasks)` to run them concurrently, dramatically reducing overall request time.
+## 2024-06-12 - LRU Cache String Normalization in Loops
+**Learning:** String manipulation (like regex substitution) inside heavily iterated loops (like N*M string matching for invoice descriptions vs PO lines) creates a massive overhead.
+**Action:** When strings are frequently identical (like matching repetitive line items), pre-compile the regex and wrap the normalization logic with an LRU cache (`@functools.lru_cache`). This reduces redundant text processing into an O(1) hash map lookup, and prevents the overhead from repeated regex compilation. Make sure to coerce to strings first before caching since `lru_cache` expects hashable inputs.
