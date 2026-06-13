@@ -7,6 +7,7 @@ Compares: Invoice (extracted) vs Purchase Order vs Goods Receipt.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from typing import Any
@@ -21,10 +22,21 @@ def _coerce_float(value: Any) -> float:
         return 0.0
 
 
-def _normalize_description(value: Any) -> str:
-    text = str(value or "").lower().strip()
-    text = re.sub(r"[^a-z0-9]+", " ", text)
+_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
+
+@functools.lru_cache(maxsize=1024)
+def _normalize_string(text: str) -> str:
+    """
+    ⚡ Bolt Optimization:
+    Memoize string normalization to prevent O(N*M) redundant computations
+    during 3-way matching. The regex is also pre-compiled above.
+    """
+    text = text.lower().strip()
+    text = _NORMALIZE_RE.sub(" ", text)
     return " ".join(text.split())
+
+def _normalize_description(value: Any) -> str:
+    return _normalize_string(str(value or ""))
 
 
 def _match_score(left: str, right: str) -> float:
