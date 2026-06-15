@@ -7,11 +7,15 @@ Compares: Invoice (extracted) vs Purchase Order vs Goods Receipt.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Pre-compile the regex to avoid recompiling it on every function call
+_NON_ALPHANUM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _coerce_float(value: Any) -> float:
@@ -21,10 +25,24 @@ def _coerce_float(value: Any) -> float:
         return 0.0
 
 
-def _normalize_description(value: Any) -> str:
-    text = str(value or "").lower().strip()
-    text = re.sub(r"[^a-z0-9]+", " ", text)
+@functools.lru_cache(maxsize=2048)
+def _normalize_string(text: str) -> str:
+    """
+    Memoized core string normalization logic.
+    Requires string input to be hashable for the lru_cache.
+    """
+    text = text.lower().strip()
+    text = _NON_ALPHANUM_RE.sub(" ", text)
     return " ".join(text.split())
+
+
+def _normalize_description(value: Any) -> str:
+    """
+    Normalizes a description to alphanumeric tokens separated by single spaces.
+    Converts Any input to str to avoid TypeError: unhashable type with lru_cache.
+    """
+    text = str(value or "")
+    return _normalize_string(text)
 
 
 def _match_score(left: str, right: str) -> float:
