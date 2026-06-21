@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -27,43 +28,57 @@ def _normalize_description(value: Any) -> str:
     return " ".join(text.split())
 
 
-def _match_score(left: str, right: str) -> float:
-    if not left or not right:
+@dataclass(frozen=True)
+class PrecomputedMatchCandidate:
+    raw_data: dict[str, Any]
+    normalized_desc: str
+    tokens: set[str]
+
+    @classmethod
+    def create(cls, data: dict[str, Any]) -> "PrecomputedMatchCandidate":
+        desc = _normalize_description(data.get("item_description"))
+        return cls(
+            raw_data=data,
+            normalized_desc=desc,
+            tokens=set(desc.split()) if desc else set(),
+        )
+
+
+def _match_score(left_desc: str, left_tokens: set[str], right: PrecomputedMatchCandidate) -> float:
+    if not left_desc or not right.normalized_desc:
         return 0.0
-    if left == right:
+    if left_desc == right.normalized_desc:
         return 1.0
-    if left in right or right in left:
-        shorter = min(len(left), len(right))
-        longer = max(len(left), len(right))
+    if left_desc in right.normalized_desc or right.normalized_desc in left_desc:
+        shorter = min(len(left_desc), len(right.normalized_desc))
+        longer = max(len(left_desc), len(right.normalized_desc))
         return shorter / longer if longer else 0.0
 
-    left_tokens = set(left.split())
-    right_tokens = set(right.split())
-    if not left_tokens or not right_tokens:
+    if not left_tokens or not right.tokens:
         return 0.0
 
-    overlap = left_tokens & right_tokens
+    overlap = left_tokens & right.tokens
     if not overlap:
         return 0.0
 
-    return len(overlap) / max(len(left_tokens), len(right_tokens))
+    return len(overlap) / max(len(left_tokens), len(right.tokens))
 
 
-def _find_best_match(description: str, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
-    normalized_description = _normalize_description(description)
-    best_match: dict[str, Any] | None = None
+def _find_best_match(
+    normalized_desc: str,
+    tokens: set[str],
+    candidates: list[PrecomputedMatchCandidate]
+) -> dict[str, Any] | None:
+    best_match: PrecomputedMatchCandidate | None = None
     best_score = 0.0
 
     for candidate in candidates:
-        score = _match_score(
-            normalized_description,
-            _normalize_description(candidate.get("item_description")),
-        )
+        score = _match_score(normalized_desc, tokens, candidate)
         if score > best_score:
             best_score = score
             best_match = candidate
 
-    return best_match if best_score >= 0.4 else None
+    return best_match.raw_data if best_match and best_score >= 0.4 else None
 
 
 def _build_shortage_notification(discrepancies: list[dict[str, Any]]) -> dict[str, Any]:
@@ -167,24 +182,34 @@ def execute_3_way_match(
 
     discrepancies: list[dict[str, Any]] = []
 
+    # ⚡ Bolt Optimization:
+    # Precompute normalized descriptions and token sets for candidates outside the loop.
+    # This turns O(N*M) redundant string splitting and tokenizing into O(N) precomputation
+    # plus O(N*M) simple set intersections, significantly speeding up large invoices.
+    precomputed_po = [PrecomputedMatchCandidate.create(pl) for pl in po_lines]
+    precomputed_receipt = [PrecomputedMatchCandidate.create(rl) for rl in receipt_lines]
+
     for inv_item in invoice_items:
-        desc = str(inv_item.get("description", "") or "").strip()
+        raw_desc = str(inv_item.get("description", "") or "").strip()
+        normalized_desc = _normalize_description(raw_desc)
+        tokens = set(normalized_desc.split()) if normalized_desc else set()
+
         inv_qty = _coerce_float(inv_item.get("quantity"))
         inv_price = _coerce_float(inv_item.get("unit_price"))
 
-        po_line = _find_best_match(desc, po_lines)
-        receipt_line = _find_best_match(desc, receipt_lines)
+        po_line = _find_best_match(normalized_desc, tokens, precomputed_po)
+        receipt_line = _find_best_match(normalized_desc, tokens, precomputed_receipt)
 
         if not po_line:
             discrepancies.append({
                 "type": "UNAUTHORIZED_ITEM",
-                "item": desc,
+                "item": raw_desc,
                 "message": "Item billed was not on the Purchase Order.",
                 "why": "The invoice line item could not be matched to any approved PO line.",
                 "where": {
                     "document": "invoice.line_items",
                     "field": "description",
-                    "item_description": desc,
+                    "item_description": raw_desc,
                 },
                 "detected_from": {
                     "sources": [
@@ -209,7 +234,7 @@ def execute_3_way_match(
             if (price_diff / expected_price) > price_tolerance:
                 discrepancies.append({
                     "type": "PRICE_VARIANCE",
-                    "item": desc,
+                    "item": raw_desc,
                     "expected": expected_price,
                     "billed": inv_price,
                     "variance_pct": round((price_diff / expected_price) * 100, 2),
@@ -218,7 +243,7 @@ def execute_3_way_match(
                     "where": {
                         "document": "invoice.line_items",
                         "field": "unit_price",
-                        "item_description": desc,
+                        "item_description": raw_desc,
                     },
                     "detected_from": {
                         "sources": [
@@ -242,7 +267,7 @@ def execute_3_way_match(
         if inv_qty > received_qty:
             discrepancies.append({
                 "type": "QUANTITY_SHORTAGE",
-                "item": desc,
+                "item": raw_desc,
                 "received": received_qty,
                 "billed": inv_qty,
                 "shortfall": round(inv_qty - received_qty, 2),
@@ -251,7 +276,7 @@ def execute_3_way_match(
                 "where": {
                     "document": "invoice.line_items",
                     "field": "quantity",
-                    "item_description": desc,
+                    "item_description": raw_desc,
                 },
                 "detected_from": {
                     "sources": [
