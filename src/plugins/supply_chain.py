@@ -27,7 +27,7 @@ def _normalize_description(value: Any) -> str:
     return " ".join(text.split())
 
 
-def _match_score(left: str, right: str) -> float:
+def _match_score(left: str, left_tokens: set[str], right: str, right_tokens: set[str]) -> float:
     if not left or not right:
         return 0.0
     if left == right:
@@ -37,8 +37,6 @@ def _match_score(left: str, right: str) -> float:
         longer = max(len(left), len(right))
         return shorter / longer if longer else 0.0
 
-    left_tokens = set(left.split())
-    right_tokens = set(right.split())
     if not left_tokens or not right_tokens:
         return 0.0
 
@@ -49,15 +47,21 @@ def _match_score(left: str, right: str) -> float:
     return len(overlap) / max(len(left_tokens), len(right_tokens))
 
 
-def _find_best_match(description: str, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _find_best_match(
+    description: str,
+    candidates: list[tuple[dict[str, Any], str, set[str]]]
+) -> dict[str, Any] | None:
     normalized_description = _normalize_description(description)
+    desc_tokens = set(normalized_description.split())
     best_match: dict[str, Any] | None = None
     best_score = 0.0
 
-    for candidate in candidates:
+    for candidate, candidate_norm, candidate_tokens in candidates:
         score = _match_score(
             normalized_description,
-            _normalize_description(candidate.get("item_description")),
+            desc_tokens,
+            candidate_norm,
+            candidate_tokens
         )
         if score > best_score:
             best_score = score
@@ -167,13 +171,26 @@ def execute_3_way_match(
 
     discrepancies: list[dict[str, Any]] = []
 
+    # Precompute PO and Receipt lines to avoid O(N*M) redundant string operations
+    precomputed_po_lines: list[tuple[dict[str, Any], str, set[str]]] = []
+    for line in po_lines:
+        norm = _normalize_description(line.get("item_description"))
+        toks = set(norm.split())
+        precomputed_po_lines.append((line, norm, toks))
+
+    precomputed_receipt_lines: list[tuple[dict[str, Any], str, set[str]]] = []
+    for line in receipt_lines:
+        norm = _normalize_description(line.get("item_description"))
+        toks = set(norm.split())
+        precomputed_receipt_lines.append((line, norm, toks))
+
     for inv_item in invoice_items:
         desc = str(inv_item.get("description", "") or "").strip()
         inv_qty = _coerce_float(inv_item.get("quantity"))
         inv_price = _coerce_float(inv_item.get("unit_price"))
 
-        po_line = _find_best_match(desc, po_lines)
-        receipt_line = _find_best_match(desc, receipt_lines)
+        po_line = _find_best_match(desc, precomputed_po_lines)
+        receipt_line = _find_best_match(desc, precomputed_receipt_lines)
 
         if not po_line:
             discrepancies.append({
