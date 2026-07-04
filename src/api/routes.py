@@ -308,14 +308,17 @@ async def health() -> dict:
         return report
 
     async def _check_tables() -> dict[str, object]:
+        from src.infrastructure.supabase_repos import get_connection_pool
         try:
-            conn = await asyncpg.connect(settings.database_url, statement_cache_size=0)
-            try:
+            # ⚡ Bolt Optimization:
+            # Reusing the existing connection pool instead of creating a new
+            # connection for every health check. This eliminates expensive
+            # TCP handshakes and TLS overhead.
+            pool = await get_connection_pool(settings.database_url)
+            async with pool.acquire() as conn:
                 await conn.execute("SELECT job_id FROM processing_jobs LIMIT 1")
                 await conn.execute("SELECT id FROM document_registry LIMIT 1")
                 return {"ok": True}
-            finally:
-                await conn.close()
         except asyncpg.PostgresError as exc:
             code = getattr(exc, "sqlstate", "")
             return {"ok": False, "error": str(exc), "code": code}
