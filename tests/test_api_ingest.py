@@ -38,6 +38,12 @@ class DummyStorage:
     def __init__(self, *_args, **_kwargs) -> None:
         pass
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+
     async def upload(self, path: str, data: bytes, content_type: str = "application/pdf") -> str:
         return "http://example.com/file.pdf"
 

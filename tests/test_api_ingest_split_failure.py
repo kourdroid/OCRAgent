@@ -34,6 +34,12 @@ class FailingStorage:
     def __init__(self, *_args, **_kwargs) -> None:
         return None
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+
     async def upload(self, path: str, data: bytes, content_type: str = "application/pdf") -> str:
         raise TimeoutError("storage upload timed out")
 

@@ -4,14 +4,13 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import aiofiles
 import asyncpg
 import tempfile
 import redis.asyncio as redis
 from fastapi import APIRouter, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
@@ -68,18 +67,12 @@ async def ingest(file: UploadFile) -> IngestResponse:
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise HTTPException(status_code=500, detail="Supabase Storage not configured")
 
-    storage = SupabaseStorage(
-        settings.supabase_url,
-        settings.supabase_service_role_key,
-        timeout_s=settings.storage_upload_timeout_s,
-    )
-
     job_id = str(uuid.uuid4())
 
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             target_path = Path(tmpdir) / f"{job_id}.pdf"
-            
+
             content = await file.read()
             if not content:
                 logger.error("step=ingest status=failed reason=empty_file")
@@ -99,31 +92,39 @@ async def ingest(file: UploadFile) -> IngestResponse:
             try:
                 upload_tasks = []
                 sp_job_ids = []
-                for split_index, sp in enumerate(split_paths, start=1):
-                    sp_job_id = str(uuid.uuid4())
-                    sp_job_ids.append(sp_job_id)
-                    split_name = Path(sp).name
-                    logger.info(
-                        "step=ingest split_process status=start split_index=%s total_splits=%s split_file=%s",
-                        split_index,
-                        len(split_paths),
-                        split_name,
-                    )
-                    file_bytes = Path(sp).read_bytes()
-                    upload_tasks.append(storage.upload(f"{sp_job_id}.pdf", file_bytes))
 
-                try:
-                    # ⚡ Bolt Optimization:
-                    # Execute all storage uploads concurrently using asyncio.gather
-                    # This replaces the N+1 sequential await calls inside the loop,
-                    # reducing total upload time from O(N) to roughly O(1) for split PDFs.
-                    public_urls = await asyncio.gather(*upload_tasks)
-                except Exception as exc:
-                    logger.exception(
-                        "step=ingest split_process status=failed phase=upload total_splits=%s",
-                        len(split_paths),
-                    )
-                    raise SplitEnqueueError(phase="upload", split_file="multiple_splits", original_error=exc) from exc
+                async with SupabaseStorage(
+                    settings.supabase_url,
+                    settings.supabase_service_role_key,
+                    timeout_s=settings.storage_upload_timeout_s,
+                ) as storage:
+                    for split_index, sp in enumerate(split_paths, start=1):
+                        sp_job_id = str(uuid.uuid4())
+                        sp_job_ids.append(sp_job_id)
+                        split_name = Path(sp).name
+                        logger.info(
+                            "step=ingest split_process status=start split_index=%s total_splits=%s split_file=%s",
+                            split_index,
+                            len(split_paths),
+                            split_name,
+                        )
+                        file_bytes = Path(sp).read_bytes()
+                        upload_tasks.append(storage.upload(f"{sp_job_id}.pdf", file_bytes))
+
+                    try:
+                        # ⚡ Bolt Optimization:
+                        # Execute all storage uploads concurrently using asyncio.gather
+                        # This replaces the N+1 sequential await calls inside the loop,
+                        # reducing total upload time from O(N) to roughly O(1) for split PDFs.
+                        public_urls = await asyncio.gather(*upload_tasks)
+                    except Exception as exc:
+                        logger.exception(
+                            "step=ingest split_process status=failed phase=upload total_splits=%s",
+                            len(split_paths),
+                        )
+                        raise SplitEnqueueError(
+                            phase="upload", split_file="multiple_splits", original_error=exc
+                        ) from exc
 
                 for sp_job_id, public_url in zip(sp_job_ids, public_urls):
                     jobs_to_create.append(
@@ -143,7 +144,9 @@ async def ingest(file: UploadFile) -> IngestResponse:
                             "step=ingest split_process status=failed phase=create_jobs_bulk total_splits=%s",
                             len(split_paths),
                         )
-                        raise SplitEnqueueError(phase="create_jobs_bulk", split_file="all_splits", original_error=exc) from exc
+                        raise SplitEnqueueError(
+                            phase="create_jobs_bulk", split_file="all_splits", original_error=exc
+                        ) from exc
 
                     try:
                         await queue.enqueue_jobs_bulk(jobs_to_create)
@@ -152,7 +155,9 @@ async def ingest(file: UploadFile) -> IngestResponse:
                             "step=ingest split_process status=failed phase=enqueue_jobs_bulk total_splits=%s",
                             len(split_paths),
                         )
-                        raise SplitEnqueueError(phase="enqueue_jobs_bulk", split_file="all_splits", original_error=exc) from exc
+                        raise SplitEnqueueError(
+                            phase="enqueue_jobs_bulk", split_file="all_splits", original_error=exc
+                        ) from exc
             except Exception as exc:
                 logger.exception("step=ingest enqueue_failed count=%s", len(job_ids))
                 for jid in job_ids:
