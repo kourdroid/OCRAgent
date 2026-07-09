@@ -18,10 +18,19 @@ from src.schemas import RegistrySchema
 logger = logging.getLogger(__name__)
 
 
+_SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
+_SANITIZE_DIGIT_RE = re.compile(r'\d+')
+
+
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
-    return re.sub(r'\d+', '', re.sub(r'[\/:\-\.]+', ' ', text)).strip().lower()
+    text = _SANITIZE_PUNC_RE.sub(' ', text)
+    text = _SANITIZE_DIGIT_RE.sub('', text)
+    return text.strip().lower()
+
+
+_PO_NUMBER_RE = re.compile(r"[A-Za-z]{1,10}[A-Za-z0-9\-]*\d[A-Za-z0-9\-]*")
 
 
 def _extract_po_number(value: Any) -> str:
@@ -30,7 +39,7 @@ def _extract_po_number(value: Any) -> str:
         return ""
 
     first_segment = raw_value.split("/", 1)[0].splitlines()[0].strip()
-    match = re.search(r"[A-Za-z]{1,10}[A-Za-z0-9\-]*\d[A-Za-z0-9\-]*", first_segment)
+    match = _PO_NUMBER_RE.search(first_segment)
     return match.group(0).strip() if match else first_segment
 
 
