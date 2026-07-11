@@ -4,3 +4,6 @@
 ## 2024-11-20 - [Regex Pre-compilation and LRU Caching]
 **Learning:** Functions called frequently in tight loops (like `_normalize_description` and `_sanitize_for_match`) can become bottlenecks due to repeated compilation of identical regular expressions.
 **Action:** Pre-compile regular expressions using `re.compile()` at the module level. Furthermore, when a string normalization function accepts an `Any` type, wrap it with `@functools.lru_cache` but cast the argument to `str` first to avoid `TypeError: unhashable type`.
+## 2024-11-20 - [Avoid direct asyncpg.connect in high-frequency endpoints]
+**Learning:** In endpoints that are hit frequently like `/health`, creating a direct database connection via `asyncpg.connect` is extremely slow and resource intensive due to the TCP/TLS handshakes and authentication overhead.
+**Action:** Always use the shared connection pool wrapper `get_connection_pool` to retrieve connections. This eliminates the overhead of opening a new physical connection per request.
