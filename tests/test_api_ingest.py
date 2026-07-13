@@ -34,11 +34,13 @@ class DummyJobsRepo:
     async def create_jobs_bulk(self, jobs_data: list[dict[str, Any]]) -> None:
         return None
 
+import httpx
+
 class DummyStorage:
     def __init__(self, *_args, **_kwargs) -> None:
-        pass
+        self.timeout = httpx.Timeout(60.0)
 
-    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf") -> str:
+    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf", client=None) -> str:
         return "http://example.com/file.pdf"
 
 
