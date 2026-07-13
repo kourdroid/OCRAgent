@@ -30,11 +30,13 @@ class DummyJobsRepo:
         return None
 
 
+import httpx
+
 class FailingStorage:
     def __init__(self, *_args, **_kwargs) -> None:
-        return None
+        self.timeout = httpx.Timeout(60.0)
 
-    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf") -> str:
+    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf", client=None) -> str:
         raise TimeoutError("storage upload timed out")
 
 

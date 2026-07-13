@@ -21,27 +21,41 @@ class SupabaseStorage:
             "apikey": self.service_role_key,
         }
 
-    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf") -> str:
+    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf", client: httpx.AsyncClient | None = None) -> str:
         """Upload file, return public URL."""
         url = f"{self.supabase_url}/storage/v1/object/{self.BUCKET}/{path}"
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        if client:
             resp = await client.post(
                 url,
                 content=data,
                 headers={**self.headers, "Content-Type": content_type},
             )
             resp.raise_for_status()
+        else:
+            async with httpx.AsyncClient(timeout=self.timeout) as client_local:
+                resp = await client_local.post(
+                    url,
+                    content=data,
+                    headers={**self.headers, "Content-Type": content_type},
+                )
+                resp.raise_for_status()
             
         return self.get_public_url(path)
 
-    async def download(self, path: str) -> bytes:
+    async def download(self, path: str, client: httpx.AsyncClient | None = None) -> bytes:
         """Download file bytes."""
         url = f"{self.supabase_url}/storage/v1/object/{self.BUCKET}/{path}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+
+        if client:
             resp = await client.get(url, headers=self.headers)
             resp.raise_for_status()
             return resp.content
+        else:
+            async with httpx.AsyncClient(timeout=self.timeout) as client_local:
+                resp = await client_local.get(url, headers=self.headers)
+                resp.raise_for_status()
+                return resp.content
 
     def get_public_url(self, path: str) -> str:
         """Construct the public URL without an API call."""
