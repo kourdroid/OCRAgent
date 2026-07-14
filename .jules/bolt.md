@@ -4,3 +4,6 @@
 ## 2024-11-20 - [Regex Pre-compilation and LRU Caching]
 **Learning:** Functions called frequently in tight loops (like `_normalize_description` and `_sanitize_for_match`) can become bottlenecks due to repeated compilation of identical regular expressions.
 **Action:** Pre-compile regular expressions using `re.compile()` at the module level. Furthermore, when a string normalization function accepts an `Any` type, wrap it with `@functools.lru_cache` but cast the argument to `str` first to avoid `TypeError: unhashable type`.
+## 2024-11-20 - [Optimizing SequenceMatcher]
+**Learning:** In Python text-processing loops, `difflib.SequenceMatcher` performance can be heavily optimized by hoisting initialization (e.g., `matcher = difflib.SequenceMatcher(None, a=static_string)`), updating the comparison string in the loop using `matcher.set_seq2(dynamic_string)`, and pre-filtering with `matcher.quick_ratio()` before invoking the expensive `matcher.ratio()` method.
+**Action:** When finding best matches in a loop with `difflib`, reuse the matcher and short-circuit with `quick_ratio()`.
