@@ -4,20 +4,19 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import aiofiles
 import asyncpg
 import tempfile
 import redis.asyncio as redis
 from fastapi import APIRouter, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
 from src.core.pdf_splitter import split_pdf
 from src.infrastructure.redis_queue import RedisQueue
-from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository
+from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository, get_connection_pool
 from src.infrastructure.supabase_storage import SupabaseStorage
 
 router = APIRouter()
@@ -79,7 +78,7 @@ async def ingest(file: UploadFile) -> IngestResponse:
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             target_path = Path(tmpdir) / f"{job_id}.pdf"
-            
+
             content = await file.read()
             if not content:
                 logger.error("step=ingest status=failed reason=empty_file")
@@ -143,7 +142,9 @@ async def ingest(file: UploadFile) -> IngestResponse:
                             "step=ingest split_process status=failed phase=create_jobs_bulk total_splits=%s",
                             len(split_paths),
                         )
-                        raise SplitEnqueueError(phase="create_jobs_bulk", split_file="all_splits", original_error=exc) from exc
+                        raise SplitEnqueueError(
+                            phase="create_jobs_bulk", split_file="all_splits", original_error=exc
+                        ) from exc
 
                     try:
                         await queue.enqueue_jobs_bulk(jobs_to_create)
@@ -152,7 +153,9 @@ async def ingest(file: UploadFile) -> IngestResponse:
                             "step=ingest split_process status=failed phase=enqueue_jobs_bulk total_splits=%s",
                             len(split_paths),
                         )
-                        raise SplitEnqueueError(phase="enqueue_jobs_bulk", split_file="all_splits", original_error=exc) from exc
+                        raise SplitEnqueueError(
+                            phase="enqueue_jobs_bulk", split_file="all_splits", original_error=exc
+                        ) from exc
             except Exception as exc:
                 logger.exception("step=ingest enqueue_failed count=%s", len(job_ids))
                 for jid in job_ids:
@@ -309,13 +312,15 @@ async def health() -> dict:
 
     async def _check_tables() -> dict[str, object]:
         try:
-            conn = await asyncpg.connect(settings.database_url, statement_cache_size=0)
-            try:
+            # ⚡ Bolt Optimization:
+            # Use shared connection pool via get_connection_pool instead of creating
+            # a new connection with asyncpg.connect() directly. This avoids expensive
+            # TCP/TLS handshake overhead for high-frequency endpoints like /health.
+            pool = await get_connection_pool(settings.database_url)
+            async with pool.acquire() as conn:
                 await conn.execute("SELECT job_id FROM processing_jobs LIMIT 1")
                 await conn.execute("SELECT id FROM document_registry LIMIT 1")
                 return {"ok": True}
-            finally:
-                await conn.close()
         except asyncpg.PostgresError as exc:
             code = getattr(exc, "sqlstate", "")
             return {"ok": False, "error": str(exc), "code": code}
