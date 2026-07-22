@@ -155,13 +155,24 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
 
     sanitized_current = _sanitize_for_match(ident.header_text)
 
+    # ⚡ Bolt Optimization:
+    # difflib.SequenceMatcher caches heuristics for the sequence passed as `b`.
+    # Hoisting the initialization and setting the static search term as `b`
+    # avoids recreating the matcher and re-analyzing the target string inside the loop.
+    matcher = difflib.SequenceMatcher(None, b=sanitized_current)
+
     for row in registry_rows:
         existing_text = row.get("ocr_text_cache") or ""
         sanitized_existing = _sanitize_for_match(existing_text)
-        ratio = difflib.SequenceMatcher(None, sanitized_current, sanitized_existing).ratio()
-        if ratio > highest_ratio:
-            highest_ratio = ratio
-            best_match = row
+
+        matcher.set_seq1(sanitized_existing)
+
+        # Use quick_ratio() to pre-filter poor matches before calling the expensive ratio()
+        if matcher.quick_ratio() > highest_ratio:
+            ratio = matcher.ratio()
+            if ratio > highest_ratio:
+                highest_ratio = ratio
+                best_match = row
 
     if best_match and highest_ratio >= 0.80:
         matched_vendor = best_match.get("vendor_name") or vendor_name
