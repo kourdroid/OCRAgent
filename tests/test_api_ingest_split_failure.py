@@ -32,9 +32,10 @@ class DummyJobsRepo:
 
 class FailingStorage:
     def __init__(self, *_args, **_kwargs) -> None:
+        self.timeout = 60.0
         return None
 
-    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf") -> str:
+    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf", client=None) -> str:
         raise TimeoutError("storage upload timed out")
 
 
