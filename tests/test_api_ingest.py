@@ -36,9 +36,9 @@ class DummyJobsRepo:
 
 class DummyStorage:
     def __init__(self, *_args, **_kwargs) -> None:
-        pass
+        self.timeout = 60.0
 
-    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf") -> str:
+    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf", client=None) -> str:
         return "http://example.com/file.pdf"
 
 
