@@ -7,3 +7,6 @@
 ## 2024-11-20 - [HTTP Connection Pooling for Concurrent Uploads]
 **Learning:** Using `asyncio.gather` for concurrent I/O isn't fully optimized if the underlying HTTP client (like `httpx.AsyncClient`) is instantiated inside the sub-task. This causes repeated TCP/TLS handshakes, negating some concurrency benefits.
 **Action:** When performing concurrent HTTP requests (e.g., uploading many files), instantiate a shared `httpx.AsyncClient` outside the loop/task generation using an `async with` block, and pass the client into the concurrent sub-tasks to take advantage of HTTP connection pooling.
+## 2024-11-20 - [Database Query Performance with Missing Indexes]
+**Learning:** `list_jobs` endpoints in Supabase repositories can experience O(N) or O(N log N) scaling issues when querying and sorting by `created_at DESC` or `status` without appropriate backing indexes in PostgreSQL.
+**Action:** Created concurrent B-Tree indexes on `processing_jobs (status, created_at DESC)` and `processing_jobs (created_at DESC)` to allow PostgreSQL to do backwards index scans and turn these into O(LIMIT) queries.
