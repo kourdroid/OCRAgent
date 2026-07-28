@@ -80,14 +80,17 @@ async def ingest(file: UploadFile) -> IngestResponse:
         with tempfile.TemporaryDirectory() as tmpdir:
             target_path = Path(tmpdir) / f"{job_id}.pdf"
 
-            content = await file.read()
-            if not content:
+            file_size = 0
+            async with aiofiles.open(target_path, "wb") as f:
+                while chunk := await file.read(1024 * 1024):
+                    file_size += len(chunk)
+                    await f.write(chunk)
+
+            if file_size == 0:
                 logger.error("step=ingest status=failed reason=empty_file")
                 raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-            logger.info("step=ingest action=save_tmp file_size=%s", len(content))
-            async with aiofiles.open(target_path, "wb") as f:
-                await f.write(content)
+            logger.info("step=ingest action=save_tmp file_size=%s", file_size)
 
             split_paths = split_pdf(target_path, output_dir=Path(tmpdir))
 
