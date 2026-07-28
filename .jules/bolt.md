@@ -7,3 +7,9 @@
 ## 2024-11-20 - [HTTP Connection Pooling for Concurrent Uploads]
 **Learning:** Using `asyncio.gather` for concurrent I/O isn't fully optimized if the underlying HTTP client (like `httpx.AsyncClient`) is instantiated inside the sub-task. This causes repeated TCP/TLS handshakes, negating some concurrency benefits.
 **Action:** When performing concurrent HTTP requests (e.g., uploading many files), instantiate a shared `httpx.AsyncClient` outside the loop/task generation using an `async with` block, and pass the client into the concurrent sub-tasks to take advantage of HTTP connection pooling.
+## 2024-11-20 - [Chunked File Reads for Uploads]
+**Learning:** In backend endpoints processing file uploads (like PDF ingestion),  loads the entire file into memory at once, causing massive memory spikes and potential OOM errors for large documents.
+**Action:** Always process large file uploads using chunked reads (e.g. `await file.read(1024 * 1024)`) inside a loop and write to a destination stream piece by piece to maintain a constant memory footprint.
+## 2024-11-20 - [Chunked File Reads for Uploads]
+**Learning:** In backend endpoints processing file uploads (like PDF ingestion), `await file.read()` loads the entire file into memory at once, causing massive memory spikes and potential OOM errors for large documents.
+**Action:** Always process large file uploads using chunked reads (e.g. `await file.read(1024 * 1024)`) inside a loop and write to a destination stream piece by piece to maintain a constant memory footprint.
