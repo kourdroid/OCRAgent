@@ -7,3 +7,6 @@
 ## 2024-11-20 - [HTTP Connection Pooling for Concurrent Uploads]
 **Learning:** Using `asyncio.gather` for concurrent I/O isn't fully optimized if the underlying HTTP client (like `httpx.AsyncClient`) is instantiated inside the sub-task. This causes repeated TCP/TLS handshakes, negating some concurrency benefits.
 **Action:** When performing concurrent HTTP requests (e.g., uploading many files), instantiate a shared `httpx.AsyncClient` outside the loop/task generation using an `async with` block, and pass the client into the concurrent sub-tasks to take advantage of HTTP connection pooling.
+## 2024-11-20 - [Blocking I/O in Async Nodes]
+**Learning:** Synchronous file operations and HTTP requests within asynchronous LangGraph nodes (e.g., `_load_document` called by async nodes) block the main event loop, causing severe concurrency bottlenecks.
+**Action:** Refactor synchronous I/O functions to use asynchronous libraries like `aiofiles` for disk reads and `httpx.AsyncClient` for HTTP requests, and ensure they are appropriately awaited by all caller nodes.
