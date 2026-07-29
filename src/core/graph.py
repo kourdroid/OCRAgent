@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import aiofiles
 import difflib
 import logging
 import re
@@ -117,14 +118,15 @@ class GraphDeps:
     webhook: WebhookClient
 
 
-def _load_document(file_path: str) -> Any:
+async def _load_document(file_path: str) -> Any:
     if file_path.startswith("http://") or file_path.startswith("https://"):
-        resp = httpx.get(file_path)
-        resp.raise_for_status()
-        pdf_bytes = resp.content
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(file_path)
+            resp.raise_for_status()
+            pdf_bytes = resp.content
     else:
-        with open(file_path, "rb") as f:
-            pdf_bytes = f.read()
+        async with aiofiles.open(file_path, "rb") as f:
+            pdf_bytes = await f.read()
 
     class PDFPart:
         mime_type = "application/pdf"
@@ -142,7 +144,7 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
     logger.info("job=%s step=fingerprint_and_lookup status=start file=%s", job_id, file_path)
     await deps.jobs.mark_processing(job_id, None)
 
-    image = _load_document(file_path)
+    image = await _load_document(file_path)
     ident: VendorIdentification = await identify_vendor(image)
 
     fingerprint_hash = compute_fingerprint(ident.header_text)
@@ -210,7 +212,7 @@ async def _node_discovery_agent(state: AgentState) -> Command[str]:
         return Command(update={"error": "Missing file_path"}, goto=END)
 
     logger.info("job=%s step=discovery_agent status=start", job_id)
-    image = _load_document(file_path)
+    image = await _load_document(file_path)
     schema = await discover_schema(image)
     logger.info("job=%s step=discovery_agent status=done vendor=%s version=%s", job_id, schema.vendor_name, schema.version)
     return Command(update={"proposed_schema": schema.model_dump()}, goto="human_hold")
@@ -244,7 +246,7 @@ async def _node_extract(state: AgentState, deps: GraphDeps) -> Command[str]:
         return Command(update={"error": "Missing job_id, file_path, or current_schema"}, goto=END)
 
     logger.info("job=%s step=extract status=start vendor=%s", job_id, vendor_name)
-    image = _load_document(file_path)
+    image = await _load_document(file_path)
     schema = RegistrySchema.model_validate(schema_dict)
     extracted = await extract_with_schema(image, schema)
 
