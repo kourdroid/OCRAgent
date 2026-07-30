@@ -7,3 +7,6 @@
 ## 2024-11-20 - [HTTP Connection Pooling for Concurrent Uploads]
 **Learning:** Using `asyncio.gather` for concurrent I/O isn't fully optimized if the underlying HTTP client (like `httpx.AsyncClient`) is instantiated inside the sub-task. This causes repeated TCP/TLS handshakes, negating some concurrency benefits.
 **Action:** When performing concurrent HTTP requests (e.g., uploading many files), instantiate a shared `httpx.AsyncClient` outside the loop/task generation using an `async with` block, and pass the client into the concurrent sub-tasks to take advantage of HTTP connection pooling.
+## 2024-05-18 - [Optimization] Cache `_sanitize_for_match` string normalization
+**Learning:** Functions doing regex replacements in loops (like string normalization for text matching) can be a significant bottleneck.
+**Action:** When a function performs heavily repetitive operations and is called frequently on the same arguments inside loops, use `@functools.lru_cache` to cache its output for significant speedups.
