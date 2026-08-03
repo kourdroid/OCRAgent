@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -22,6 +23,12 @@ _SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
 _SANITIZE_DIGIT_RE = re.compile(r'\d+')
 
 
+# ⚡ Bolt Optimization:
+# Adding an LRU cache prevents redundant regular expression evaluations and string
+# operations for duplicate inputs during frequent matching checks.
+# Impact: Improves CPU utilization and speeds up matching latency by avoiding O(N)
+# duplicate sanitization cycles on repeated headers/terms.
+@functools.lru_cache(maxsize=1024)
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
