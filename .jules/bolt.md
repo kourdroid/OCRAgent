@@ -7,3 +7,6 @@
 ## 2024-11-20 - [HTTP Connection Pooling for Concurrent Uploads]
 **Learning:** Using `asyncio.gather` for concurrent I/O isn't fully optimized if the underlying HTTP client (like `httpx.AsyncClient`) is instantiated inside the sub-task. This causes repeated TCP/TLS handshakes, negating some concurrency benefits.
 **Action:** When performing concurrent HTTP requests (e.g., uploading many files), instantiate a shared `httpx.AsyncClient` outside the loop/task generation using an `async with` block, and pass the client into the concurrent sub-tasks to take advantage of HTTP connection pooling.
+## 2024-11-20 - [Regex Pre-compilation and LRU Caching]
+**Learning:** Functions called frequently in tight loops (like `_normalize_description` and `_sanitize_for_match`) can become bottlenecks due to repeated compilation of identical regular expressions and repeated operations.
+**Action:** Pre-compile regular expressions using `re.compile()` at the module level. Furthermore, when a string normalization function is called multiple times on duplicate strings, wrap it with `@functools.lru_cache` but cast the argument to a hashable type if needed to avoid `TypeError: unhashable type`.
