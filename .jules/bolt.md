@@ -10,3 +10,6 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2024-11-20 - [Async Refactoring without Adding Dependencies]
+**Learning:** When refactoring synchronous I/O to be asynchronous (like file reading in `_load_document`), introducing third-party packages like `aiofiles` is dangerous without verifying if they are already in `requirements.txt`. Adding a missing dependency will crash the app and violates the `Ask first` rule.
+**Action:** Always check `requirements.txt` first. Alternatively, use standard library tools like `asyncio.to_thread(open, ...)` to achieve non-blocking behavior without adding dependencies.
