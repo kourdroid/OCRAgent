@@ -10,3 +10,6 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2024-11-20 - [Async I/O in LangGraph Nodes]
+**Learning:** Using synchronous I/O operations like `httpx.get` or standard `open()` for reading files inside asynchronous execution paths (such as LangGraph nodes) blocks the main asyncio event loop, causing severe performance bottlenecks.
+**Action:** Always make functions that perform HTTP requests or file system reads asynchronous (using `async def`) and utilize async-compatible libraries like `httpx.AsyncClient` and `aiofiles` to ensure concurrent task execution remains non-blocking.
