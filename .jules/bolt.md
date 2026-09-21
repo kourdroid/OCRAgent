@@ -10,3 +10,6 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2025-02-23 - Database Index Optimization for Pagination
+ **Learning:** Missing database indexes on frequently queried fields like `status` and `created_at` in the `processing_jobs` table can cause expensive O(N log N) table scans and sorts during pagination on the `/jobs` endpoint.
+ **Action:** Create composite `(status, created_at DESC)` and simple `(created_at DESC)` indexes using `CREATE INDEX CONCURRENTLY IF NOT EXISTS` to optimize backend queries without causing table-level write locks.
