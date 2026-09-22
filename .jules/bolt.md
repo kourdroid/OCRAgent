@@ -10,3 +10,6 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2024-11-20 - [Async Event Loop Blocking by Synchronous I/O]
+**Learning:** Calling synchronous I/O functions (like `httpx.get` or standard `open().read()`) inside asynchronous code blocks the Python event loop, crippling concurrency.
+**Action:** Always refactor blocking I/O bound functions to use `async def` and non-blocking libraries (e.g. `httpx.AsyncClient` and `aiofiles`) when invoked by async task runners or frameworks like LangGraph.
