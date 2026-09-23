@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -22,6 +23,15 @@ _SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
 _SANITIZE_DIGIT_RE = re.compile(r'\d+')
 
 
+# ⚡ Bolt Optimization:
+# Added LRU caching to _sanitize_for_match to eliminate repetitive Regex operations.
+# Why: During the `fingerprint_and_lookup` loop, OCR texts from the cached registry schemas
+# are repeatedly sanitized using expensive Regex substitutions. This bounds the operation
+# to O(1) time complexity for known schemas.
+# Impact: Expected to reduce execution time of the `fingerprint_and_lookup` node by
+# scaling from O(M * L) to O(1) per lookup iteration (where M = schemas, L = text length),
+# especially under heavy load with hundreds of registered schemas.
+@functools.lru_cache(maxsize=1024)
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
