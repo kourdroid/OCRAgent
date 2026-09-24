@@ -15,6 +15,8 @@ from src.core.state import AgentState
 from src.plugins.supply_chain import execute_3_way_match
 from src.schemas import RegistrySchema
 
+import functools
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,7 @@ _SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
 _SANITIZE_DIGIT_RE = re.compile(r'\d+')
 
 
+@functools.lru_cache(maxsize=1024)
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
