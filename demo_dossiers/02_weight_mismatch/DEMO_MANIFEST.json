@@ -1,0 +1,11 @@
+{
+  "synthetic_demo": true,
+  "external_reference": "DELASSUS-DEMO-WEIGHT-20260818-002",
+  "expected_decision": "BLOCKED",
+  "modified_document": "FRET 7672-08.pdf",
+  "expected_issue": "Freight document gross weight differs materially from the transport and declaration documents.",
+  "rule_id": "quantities.gross_weight_tolerance.v1",
+  "severity": "critical",
+  "source_document_count": 7,
+  "note": "All files are local demo copies. The visible exception banner is intentional."
+}

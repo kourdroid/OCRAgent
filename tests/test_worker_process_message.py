@@ -27,8 +27,10 @@ class DummyJobs:
 class DummyGraph:
     def __init__(self, *, fail: bool) -> None:
         self.fail = fail
+        self.invocations: list[dict] = []
 
-    async def ainvoke(self, *_args, **_kwargs):
+    async def ainvoke(self, state, *_args, **_kwargs):
+        self.invocations.append(state)
         if self.fail:
             raise RuntimeError("boom")
         return {"ok": True}
@@ -47,14 +49,22 @@ async def test_process_message_acks_on_success() -> None:
         message_id="1-0",
         job_id="job-1",
         file_path="/tmp/file.pdf",
+        client_id="supply_chain",
     )
 
     assert queue.acked == ["1-0"]
     assert jobs.failed == []
+    assert graph.invocations == [
+        {
+            "job_id": "job-1",
+            "client_id": "supply_chain",
+            "file_path": "/tmp/file.pdf",
+        }
+    ]
 
 
 @pytest.mark.asyncio
-async def test_process_message_acks_even_if_mark_failed_fails() -> None:
+async def test_process_message_does_not_ack_if_mark_failed_fails() -> None:
     queue = DummyQueue()
     jobs = DummyJobs(fail_mark_failed=True)
     graph = DummyGraph(fail=True)
@@ -68,5 +78,4 @@ async def test_process_message_acks_even_if_mark_failed_fails() -> None:
         file_path="/tmp/file.pdf",
     )
 
-    assert queue.acked == ["2-0"]
-
+    assert queue.acked == []

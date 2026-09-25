@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/table";
 import { useIngest } from "@/hooks/use-ingest";
 import { useJobs } from "@/hooks/use-jobs";
+import { CLIENT_CONFIGS, DEFAULT_CLIENT_ID, getClientConfig } from "@/lib/clients";
 import type { Job, JobStatus } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -92,14 +93,17 @@ function StatusBadge({ status }: { status: JobStatus }) {
 // Ingest panel
 // ---------------------------------------------------------------------------
 interface IngestPanelProps {
+  clientId: string;
+  onClientChange: (clientId: string) => void;
   onSuccess: () => void;
 }
 
-function IngestPanel({ onSuccess }: IngestPanelProps) {
+function IngestPanel({ clientId, onClientChange, onSuccess }: IngestPanelProps) {
   const [isDragging, setIsDragging] = React.useState(false);
   const [selectedFile, setSelectedFile] = React.useState<File | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { ingest, isUploading, error, result, reset } = useIngest();
+  const clientConfig = getClientConfig(clientId);
 
   const clearDialogState = React.useCallback(() => {
     setSelectedFile(null);
@@ -131,7 +135,7 @@ function IngestPanel({ onSuccess }: IngestPanelProps) {
 
   async function handleUpload() {
     if (!selectedFile) return;
-    await ingest(selectedFile);
+    await ingest(selectedFile, clientId);
   }
 
   return (
@@ -146,6 +150,27 @@ function IngestPanel({ onSuccess }: IngestPanelProps) {
         <p className="text-xs leading-5 text-zinc-500">
           Upload a PDF and route it through splitting, schema lookup, extraction, matching, and delivery.
         </p>
+      </div>
+
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+            Client
+          </span>
+          <span className="text-sm text-zinc-200">{clientConfig.displayName}</span>
+        </div>
+        <select
+          value={clientId}
+          onChange={(event) => onClientChange(event.target.value)}
+          className="h-10 rounded-md border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition-colors hover:border-zinc-700 focus:border-emerald-500"
+          disabled={isUploading}
+        >
+          {CLIENT_CONFIGS.map((client) => (
+            <option key={client.clientId} value={client.clientId}>
+              {client.displayName}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
@@ -285,7 +310,12 @@ function isBlockedByAudit(job: Job): boolean {
 // ---------------------------------------------------------------------------
 export default function DashboardPage() {
   const router = useRouter();
-  const { jobs, isLoading, error, refetch } = useJobs({ pollInterval: 5000 });
+  const [selectedClientId, setSelectedClientId] = React.useState(DEFAULT_CLIENT_ID);
+  const selectedClient = getClientConfig(selectedClientId);
+  const { jobs, isLoading, error, refetch } = useJobs({
+    pollInterval: 5000,
+    clientId: selectedClientId,
+  });
 
   // Derived stats
   const totalJobs = jobs.length;
@@ -405,7 +435,11 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        <IngestPanel onSuccess={refetch} />
+        <IngestPanel
+          clientId={selectedClientId}
+          onClientChange={setSelectedClientId}
+          onSuccess={refetch}
+        />
 
         {/* Live Pipeline Table */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-950/40 ring-1 ring-zinc-800/40">
@@ -415,7 +449,7 @@ export default function DashboardPage() {
                 Live Processing Pipeline
               </h2>
               <p className="text-xs text-zinc-500">
-                Real-time view of document ingestion, validation, and downstream sync.
+                Real-time view of {selectedClient.displayName} document ingestion, validation, and downstream sync.
               </p>
             </div>
             <div className="hidden items-center gap-2 md:flex">

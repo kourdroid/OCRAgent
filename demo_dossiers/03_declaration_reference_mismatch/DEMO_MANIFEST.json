@@ -1,0 +1,11 @@
+{
+  "synthetic_demo": true,
+  "external_reference": "DELASSUS-DEMO-REF-20260818-003",
+  "expected_decision": "BLOCKED",
+  "modified_document": "DUA.pdf",
+  "expected_issue": "Declaration reference differs from the reference stated in the BAD and DUM documents.",
+  "rule_id": "identity.declaration_reference_match.v1",
+  "severity": "critical",
+  "source_document_count": 7,
+  "note": "All files are local demo copies. The visible exception banner is intentional."
+}

@@ -43,6 +43,19 @@ class SupabaseStorage:
             resp.raise_for_status()
             return resp.content
 
+    async def delete(self, paths: list[str]) -> None:
+        if not paths:
+            return
+        url = f"{self.supabase_url}/storage/v1/object/{self.BUCKET}"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.request(
+                "DELETE",
+                url,
+                json={"prefixes": paths},
+                headers={**self.headers, "Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+
     def get_public_url(self, path: str) -> str:
         """Construct the public URL without an API call."""
         return f"{self.supabase_url}/storage/v1/object/public/{self.BUCKET}/{path}"

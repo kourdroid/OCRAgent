@@ -3,14 +3,7 @@
 import * as React from "react"
 import { usePathname } from "next/navigation"
 import Link from "next/link"
-import {
-  Buildings,
-  FileCode,
-  GearSix,
-  SquaresFour,
-  ShieldCheck,
-  FilePdf,
-} from "@phosphor-icons/react"
+import { Bell, Files, ShieldCheck, SlidersHorizontal, type LucideIcon } from "lucide-react"
 
 import {
   Sidebar,
@@ -28,40 +21,25 @@ import {
 type NavItem = {
   title: string;
   url: string;
-  icon: typeof SquaresFour;
+  icon: LucideIcon;
   badge?: string;
 };
 
 const navItems: NavItem[] = [
   {
-    title: "Command Center",
-    url: "/dashboard",
-    icon: SquaresFour,
+    title: "Dossiers",
+    url: "/dossiers",
+    icon: Files,
   },
   {
-    title: "3-Way Matching",
-    url: "/three-way",
-    icon: FilePdf,
+    title: "Paramètres",
+    url: "/admin",
+    icon: SlidersHorizontal,
   },
   {
-    title: "Source Systems",
-    url: "/source-systems",
-    icon: FileCode,
-  },
-  {
-    title: "Human Review",
-    url: "/human-review",
-    icon: ShieldCheck,
-  },
-  {
-    title: "Client Modules",
-    url: "/client-modules",
-    icon: Buildings,
-  },
-  {
-    title: "Deployment",
-    url: "/deployment",
-    icon: GearSix,
+    title: "Notifications",
+    url: "/notifications",
+    icon: Bell,
   },
 ]
 
@@ -75,21 +53,23 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }
 
   return (
-    <Sidebar className="border-r border-zinc-800 bg-zinc-950" {...props}>
-      <SidebarHeader className="border-b border-zinc-800 bg-zinc-950 px-4 py-4 h-16 shrink-0 flex flex-row items-center">
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-emerald-600/20 text-emerald-500 mr-3 border border-emerald-500/20">
-          <ShieldCheck weight="fill" className="h-4 w-4" />
+    <Sidebar className="border-r border-slate-200 bg-white shadow-[8px_0_28px_rgba(15,23,42,0.03)]" {...props}>
+      <SidebarHeader className="h-20 shrink-0 border-b border-slate-200 bg-white px-5 py-4">
+        <div className="flex items-center">
+        <div className="mr-3 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
+          <ShieldCheck className="h-4 w-4" />
         </div>
         <div className="flex flex-col flex-1 truncate">
-          <span className="truncate text-sm font-semibold tracking-tight text-zinc-100">Ironclad OS</span>
-          <span className="truncate text-[10px] text-zinc-500 font-mono tracking-wider">IDP DECISION ENGINE</span>
+          <span className="truncate text-sm font-semibold tracking-tight text-slate-900">Ironclad</span>
+          <span className="truncate text-[10px] font-medium tracking-wide text-slate-500">GESTION DOCUMENTAIRE</span>
+        </div>
         </div>
       </SidebarHeader>
       
-      <SidebarContent className="bg-zinc-950 pt-4">
+      <SidebarContent className="bg-white px-3 pt-5">
         <SidebarGroup>
-          <SidebarGroupLabel className="text-zinc-500 text-xs font-mono uppercase tracking-wider mb-2">
-            Operations
+          <SidebarGroupLabel className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">
+            Espace de travail
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -101,12 +81,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       render={<Link href={item.url} />}
                       isActive={active} 
                       tooltip={item.title}
-                      className="text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 active:bg-zinc-800/50 data-[active=true]:bg-zinc-900 data-[active=true]:text-zinc-100 font-medium transition-colors"
+                      className="rounded-lg px-3 text-slate-600 hover:bg-slate-50 hover:text-slate-900 active:bg-blue-50 data-[active=true]:bg-blue-50 data-[active=true]:text-blue-700 data-[active=true]:font-semibold font-medium transition-colors"
                     >
-                      <item.icon className="h-4 w-4 shrink-0" weight={active ? "fill" : "regular"} />
+                      <item.icon className="h-4 w-4 shrink-0" />
                       <span>{item.title}</span>
                       {item.badge && (
-                        <span className="ml-auto bg-zinc-800 text-zinc-300 text-[10px] font-mono px-1.5 py-0.5 rounded">
+                        <span className="ml-auto rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
                           {item.badge}
                         </span>
                       )}

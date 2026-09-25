@@ -49,38 +49,38 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --background: #f5f7fb;
+  --foreground: #172033;
+  --card: #ffffff;
+  --card-foreground: #172033;
+  --popover: #ffffff;
+  --popover-foreground: #172033;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #edf3ff;
+  --secondary-foreground: #1e3a8a;
+  --muted: #f1f4f8;
+  --muted-foreground: #65728a;
+  --accent: #edf3ff;
+  --accent-foreground: #1e3a8a;
+  --destructive: #dc2626;
+  --border: #dfe6ef;
+  --input: #d5deea;
+  --ring: #2563eb;
+  --chart-1: #2563eb;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #8b5cf6;
+  --chart-5: #64748b;
+  --radius: 0.75rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #172033;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #edf3ff;
+  --sidebar-accent-foreground: #1e3a8a;
+  --sidebar-border: #dfe6ef;
+  --sidebar-ring: #2563eb;
 }
 
 .dark {
@@ -127,4 +127,31 @@
   html {
     @apply font-sans;
   }
+}
+
+/* The existing operations screens use explicit zinc utilities.  These bridges
+   keep every route in the same light family while individual screens are
+   progressively simplified. */
+@layer utilities {
+  .bg-zinc-950 { background-color: #f5f7fb !important; }
+  .bg-zinc-900 { background-color: #ffffff !important; }
+  .bg-zinc-800 { background-color: #eef2f7 !important; }
+  .border-zinc-900, .border-zinc-800 { border-color: #dfe6ef !important; }
+  .border-zinc-700 { border-color: #cbd5e1 !important; }
+  .text-zinc-100 { color: #172033 !important; }
+  .text-zinc-200 { color: #243047 !important; }
+  .text-zinc-300 { color: #41516b !important; }
+  .text-zinc-400 { color: #61708a !important; }
+  .text-zinc-500 { color: #738199 !important; }
+  .text-zinc-600 { color: #8b98aa !important; }
+  .text-zinc-700 { color: #a2adbc !important; }
+  .bg-emerald-950\/20, .bg-emerald-950\/30 { background-color: #ecfdf5 !important; }
+  .border-emerald-800, .border-emerald-900 { border-color: #86efac !important; }
+  .text-emerald-300, .text-emerald-400 { color: #047857 !important; }
+  .bg-amber-950\/20, .bg-amber-950\/30 { background-color: #fffbeb !important; }
+  .border-amber-800, .border-amber-900 { border-color: #fcd34d !important; }
+  .text-amber-300, .text-amber-400 { color: #b45309 !important; }
+  .bg-red-950\/20, .bg-red-950\/30, .bg-red-950\/40 { background-color: #fef2f2 !important; }
+  .border-red-800, .border-red-900 { border-color: #fecaca !important; }
+  .text-red-300, .text-red-400 { color: #b91c1c !important; }
 }

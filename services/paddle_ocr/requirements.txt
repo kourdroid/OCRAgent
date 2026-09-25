@@ -1,0 +1,8 @@
+fastapi==0.140.13
+numpy==2.3.5
+onnxruntime==1.28.0
+paddleocr==3.7.0
+paddlex[ocr-core]==3.7.2
+PyMuPDF==1.27.2.2
+python-multipart==0.0.32
+uvicorn==0.52.0

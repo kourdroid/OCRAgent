@@ -10,7 +10,7 @@ import aiofiles
 import asyncpg
 import tempfile
 import redis.asyncio as redis
-from fastapi import APIRouter, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,9 @@ from src.core.pdf_splitter import split_pdf
 from src.infrastructure.redis_queue import RedisQueue
 from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository
 from src.infrastructure.supabase_storage import SupabaseStorage
+from src.plugins.base import DEFAULT_CLIENT_ID
+from src.plugins.registry import UnknownClientPluginError, get_client_plugin, normalize_client_id
+from src.schemas import RegistrySchema
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -48,8 +51,21 @@ class IngestResponse(BaseModel):
 
 class ApproveRequest(BaseModel):
     job_id: str = Field(min_length=1)
+    client_id: str = Field(default=DEFAULT_CLIENT_ID, min_length=1)
     vendor_name: str = Field(min_length=1)
-    schema_definition: dict
+    schema_definition: RegistrySchema
+
+
+def _require_known_client(client_id: str | None) -> str:
+    normalized_client_id = normalize_client_id(client_id)
+    try:
+        get_client_plugin(normalized_client_id)
+    except UnknownClientPluginError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown client_id: {exc.client_id}",
+        ) from exc
+    return normalized_client_id
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +73,12 @@ class ApproveRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/ingest", response_model=IngestResponse)
-async def ingest(file: UploadFile) -> IngestResponse:
+async def ingest(
+    file: UploadFile,
+    client_id: str = Form(default=DEFAULT_CLIENT_ID),
+) -> IngestResponse:
     settings = get_settings()
+    normalized_client_id = _require_known_client(client_id)
 
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
@@ -122,6 +142,7 @@ async def ingest(file: UploadFile) -> IngestResponse:
                     jobs_to_create.append(
                         {
                             "job_id": sp_job_id,
+                            "client_id": normalized_client_id,
                             "file_url": public_url,
                             "file_path": public_url,
                         }
@@ -184,6 +205,7 @@ async def ingest(file: UploadFile) -> IngestResponse:
 @router.get("/jobs")
 async def list_jobs(
     status: Optional[str] = Query(default=None, description="Filter by status"),
+    client_id: Optional[str] = Query(default=None, description="Filter by client_id"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict]:
@@ -193,7 +215,12 @@ async def list_jobs(
 
     jobs = SupabaseJobsRepository(settings.database_url)
     try:
-        return await jobs.list_jobs(status=status, limit=limit, offset=offset)
+        return await jobs.list_jobs(
+            status=status,
+            client_id=_require_known_client(client_id) if client_id else None,
+            limit=limit,
+            offset=offset,
+        )
     except asyncpg.PostgresError as exc:
         logger.exception("step=list_jobs status=failed error=%s", str(exc))
         _raise_if_missing_supabase_tables(exc)
@@ -230,6 +257,7 @@ async def get_job_status(job_id: str) -> dict:
 @router.post("/approve")
 async def approve(payload: ApproveRequest) -> dict:
     settings = get_settings()
+    normalized_client_id = _require_known_client(payload.client_id)
     if not settings.database_url:
         raise HTTPException(status_code=500, detail="Database URL not configured")
 
@@ -240,17 +268,29 @@ async def approve(payload: ApproveRequest) -> dict:
         job = await jobs.get_job(payload.job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+        if job.get("status") != "WAITING_HUMAN":
+            raise HTTPException(status_code=409, detail="Job is not awaiting human approval")
+        job_client_id = normalize_client_id(str(job.get("client_id") or DEFAULT_CLIENT_ID))
+        if job_client_id != normalized_client_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Approval client_id does not match job client_id: {job_client_id}",
+            )
+        if payload.vendor_name != payload.schema_definition.vendor_name:
+            raise HTTPException(status_code=409, detail="Vendor name must match schema definition")
+
         extracted = job.get("extracted_data") or {}
         fingerprint_hash = extracted.get("fingerprint_hash")
         ocr_text_cache = extracted.get("ocr_text_cache")
-
-        vendor_name_to_save = job.get("vendor_detected") or payload.vendor_name
+        if not fingerprint_hash or not ocr_text_cache:
+            raise HTTPException(status_code=409, detail="Job is missing schema approval metadata")
 
         await registry.upsert_schema(
-            vendor_name=vendor_name_to_save,
+            vendor_name=payload.vendor_name,
             fingerprint_hash=fingerprint_hash,
             ocr_text_cache=ocr_text_cache,
-            schema_definition=payload.schema_definition,
+            schema_definition=payload.schema_definition.model_dump(),
+            client_id=normalized_client_id,
         )
 
         await jobs.mark_requeued(job_id=payload.job_id, vendor_detected=payload.vendor_name)
@@ -260,7 +300,11 @@ async def approve(payload: ApproveRequest) -> dict:
             file_path = await jobs.get_file_url(payload.job_id)
             if not file_path:
                 raise HTTPException(status_code=404, detail="Job not found")
-            await queue.enqueue_job(job_id=payload.job_id, file_path=file_path)
+            await queue.enqueue_job(
+                job_id=payload.job_id,
+                file_path=file_path,
+                client_id=normalized_client_id,
+            )
         finally:
             await queue.close()
     except asyncpg.PostgresError as exc:
@@ -302,10 +346,16 @@ async def health() -> dict:
 
     async def _check_tables() -> dict[str, object]:
         try:
-            conn = await asyncpg.connect(settings.database_url, statement_cache_size=0)
+            conn = await asyncpg.connect(
+                settings.database_url,
+                statement_cache_size=0,
+                ssl="require",
+            )
             try:
                 await conn.execute("SELECT job_id FROM processing_jobs LIMIT 1")
                 await conn.execute("SELECT id FROM document_registry LIMIT 1")
+                await conn.execute("SELECT case_id FROM dossier_cases LIMIT 1")
+                await conn.execute("SELECT event_id FROM outbox_events LIMIT 1")
                 return {"ok": True}
             finally:
                 await conn.close()

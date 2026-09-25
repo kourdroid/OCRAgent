@@ -6,6 +6,7 @@ import type { Job, JobStatus } from "@/lib/types";
 
 interface UseJobsOptions {
   status?: JobStatus;
+  clientId?: string;
   limit?: number;
   pollInterval?: number; // ms — 0 disables polling
 }
@@ -19,6 +20,7 @@ interface UseJobsResult {
 
 export function useJobs({
   status,
+  clientId,
   limit = 50,
   pollInterval = 5000,
 }: UseJobsOptions = {}): UseJobsResult {
@@ -34,7 +36,7 @@ export function useJobs({
 
     async function load() {
       try {
-        const data = await listJobs({ status, limit });
+        const data = await listJobs({ status, clientId, limit });
         if (!cancelled) {
           setJobs(data);
           setError(null);
@@ -60,7 +62,7 @@ export function useJobs({
     return () => {
       cancelled = true;
     };
-  }, [status, limit, pollInterval, tick]);
+  }, [status, clientId, limit, pollInterval, tick]);
 
   return { jobs, isLoading, error, refetch };
 }

@@ -5,6 +5,7 @@ from typing import Any, Optional, TypedDict
 
 class AgentState(TypedDict, total=False):
     job_id: str
+    client_id: str
     file_path: str
 
     detected_vendor: Optional[str]

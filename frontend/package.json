@@ -1,6 +1,7 @@
 {
   "name": "frontend",
   "version": "0.1.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -11,10 +12,11 @@
   "dependencies": {
     "@base-ui/react": "^1.4.0",
     "@phosphor-icons/react": "^2.1.10",
+    "@supabase/supabase-js": "2.112.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",
-    "next": "16.2.4",
+    "next": "^16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "shadcn": "^4.3.0",
@@ -27,7 +29,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.4",
+    "eslint-config-next": "^16.2.9",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

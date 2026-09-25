@@ -72,8 +72,13 @@ def test_execute_3_way_match_blocks_when_line_items_are_missing() -> None:
 
 @dataclass
 class _Registry:
-    async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]:
+    async def get_po_lines(
+        self,
+        po_number: str,
+        client_id: str = "default",
+    ) -> list[dict[str, Any]]:
         assert po_number in {"PO-7788", "CO2109-0171"}
+        assert client_id == "default"
         return [
             {
                 "item_description": "Steel Bolts",
@@ -81,8 +86,13 @@ class _Registry:
             }
         ]
 
-    async def get_goods_receipts(self, po_number: str) -> list[dict[str, Any]]:
+    async def get_goods_receipts(
+        self,
+        po_number: str,
+        client_id: str = "default",
+    ) -> list[dict[str, Any]]:
         assert po_number in {"PO-7788", "CO2109-0171"}
+        assert client_id == "default"
         return [
             {
                 "item_description": "Steel Bolts",

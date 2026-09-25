@@ -2,12 +2,13 @@
 
 import * as React from "react";
 import { ingestDocument } from "@/lib/api";
+import { DEFAULT_CLIENT_ID } from "@/lib/clients";
 import type { IngestResponse } from "@/lib/types";
 
 const MAX_FILE_SIZE_MB = 50;
 
 interface UseIngestResult {
-  ingest: (file: File) => Promise<IngestResponse | null>;
+  ingest: (file: File, clientId?: string) => Promise<IngestResponse | null>;
   isUploading: boolean;
   error: string | null;
   result: IngestResponse | null;
@@ -24,7 +25,10 @@ export function useIngest(): UseIngestResult {
     setResult(null);
   }, []);
 
-  const ingest = React.useCallback(async (file: File): Promise<IngestResponse | null> => {
+  const ingest = React.useCallback(async (
+    file: File,
+    clientId: string = DEFAULT_CLIENT_ID,
+  ): Promise<IngestResponse | null> => {
     // Client-side validation
     if (!file.name.toLowerCase().endsWith(".pdf")) {
       setError("Only PDF files are supported.");
@@ -39,7 +43,7 @@ export function useIngest(): UseIngestResult {
     setIsUploading(true);
 
     try {
-      const response = await ingestDocument(file);
+      const response = await ingestDocument(file, clientId);
       setResult(response);
       return response;
     } catch (err) {

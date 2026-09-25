@@ -13,8 +13,24 @@ from src.schemas import RegistrySchema
 
 @dataclass
 class DummyRegistry:
-    async def get_vendor(self, vendor_name: str) -> Optional[dict[str, Any]]:
-        return None
+    requested_client_ids: list[str]
+
+    async def get_vendor_schemas(
+        self,
+        vendor_name: str,
+        client_id: str = "default",
+    ) -> list[dict[str, Any]]:
+        return []
+
+    async def get_all_schemas(self, client_id: str = "default") -> list[dict[str, Any]]:
+        self.requested_client_ids.append(client_id)
+        return []
+
+    async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]:
+        return []
+
+    async def get_goods_receipts(self, po_number: str) -> list[dict[str, Any]]:
+        return []
 
 
 @dataclass
@@ -48,15 +64,23 @@ async def test_graph_nodes_are_awaited(monkeypatch) -> None:
     async def fake_discover_schema(_image):
         return RegistrySchema(vendor_name="DHL_Express", fields=[], version=1)
 
-    monkeypatch.setattr("src.core.graph._load_first_page_image", lambda _p: object())
+    async def fake_load_document(_path: str) -> object:
+        return object()
+
+    monkeypatch.setattr("src.core.graph._load_document", fake_load_document)
     monkeypatch.setattr("src.core.graph.identify_vendor", fake_identify_vendor)
     monkeypatch.setattr("src.core.graph.discover_schema", fake_discover_schema)
 
     jobs = DummyJobs(called=[])
-    deps = GraphDeps(registry=DummyRegistry(), jobs=jobs, webhook=DummyWebhook())
+    registry = DummyRegistry(requested_client_ids=[])
+    deps = GraphDeps(registry=registry, jobs=jobs, webhook=DummyWebhook())
     graph = build_graph(deps, checkpointer=InMemorySaver())
 
-    await graph.ainvoke({"job_id": "1", "file_path": "x.pdf"}, {"configurable": {"thread_id": "1"}})
+    await graph.ainvoke(
+        {"job_id": "1", "client_id": "supply_chain", "file_path": "x.pdf"},
+        {"configurable": {"thread_id": "1"}},
+    )
 
     assert "processing" in jobs.called
     assert "waiting_human" in jobs.called
+    assert registry.requested_client_ids == ["supply_chain"]

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AppSidebar } from "@/components/app-sidebar";
+import { AuthGate } from "@/components/auth-gate";
 import "./globals.css";
 
 const inter = Inter({
@@ -18,8 +18,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ironclad IDP",
-  description: "Document intelligence and decision automation for AP and supply chain workflows",
+  title: "Ironclad Dossier Operations",
+  description: "Evidence-backed import dossier review and decision workflow",
 };
 
 export default function RootLayout({
@@ -30,15 +30,12 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${jetbrainsMono.variable} dark antialiased h-full`}
+      className={`${inter.variable} ${jetbrainsMono.variable} antialiased h-full`}
     >
       <body className="min-h-full flex flex-col">
         <TooltipProvider>
           <SidebarProvider>
-            <AppSidebar />
-            <main className="flex-1 w-full flex flex-col overflow-hidden">
-              {children}
-            </main>
+            <AuthGate>{children}</AuthGate>
           </SidebarProvider>
         </TooltipProvider>
       </body>

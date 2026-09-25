@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.dossier_routes import router as dossier_router
+from src.api.admin_routes import router as admin_router
 from src.api.routes import router
 
 app = FastAPI(title="Ironclad-OCR")
@@ -18,4 +20,5 @@ app.add_middleware(
 )
 
 app.include_router(router)
-
+app.include_router(dossier_router)
+app.include_router(admin_router)

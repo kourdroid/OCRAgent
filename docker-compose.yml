@@ -1,6 +1,6 @@
 services:
   redis:
-    image: redis:latest
+    image: redis:8.8.0-alpine
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -12,8 +12,34 @@ services:
       timeout: 3s
       retries: 20
 
+  paddle-ocr:
+    build:
+      context: ./services/paddle_ocr
+    image: ironclad-paddle-ocr:local
+    restart: unless-stopped
+    environment:
+      PADDLE_OCR_DEVICE: cpu
+      PADDLE_OCR_ENGINE: onnxruntime
+      PADDLE_DETECTION_MODEL: PP-OCRv6_small_det
+      PADDLE_RECOGNITION_MODEL: PP-OCRv6_small_rec
+      PADDLE_OCR_RENDER_DPI: "180"
+      PADDLE_OCR_MIN_CONFIDENCE: "0.45"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)); raise SystemExit(0 if data.get('ready') else 1)",
+        ]
+      interval: 10s
+      timeout: 8s
+      retries: 60
+      start_period: 30s
+
   api:
     build: .
+    image: ironclad-backend:local
     restart: unless-stopped
     env_file:
       - .env
@@ -26,19 +52,84 @@ services:
       redis:
         condition: service_healthy
     command: ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=12)); raise SystemExit(0 if data.get('status') == 'ok' else 1)",
+        ]
+      interval: 10s
+      timeout: 15s
+      retries: 12
 
   worker:
     build: .
+    image: ironclad-backend:local
     restart: unless-stopped
     env_file:
       - .env
     environment:
       # Override REDIS_URL to use the Docker service name (not localhost)
       REDIS_URL: redis://redis:6379/0
+      DOCUMENT_PROVIDER: paddle
+      PADDLE_OCR_URL: http://paddle-ocr:8080
+      CHECK_DOCUMENT_PROVIDER: "true"
     depends_on:
       redis:
         condition: service_healthy
+      paddle-ocr:
+        condition: service_healthy
     command: ["python", "-m", "src.worker.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.worker.healthcheck"]
+      interval: 20s
+      timeout: 8s
+      retries: 6
+
+  outbox:
+    build: .
+    image: ironclad-backend:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "src.worker.outbox_dispatcher"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.worker.healthcheck"]
+      interval: 20s
+      timeout: 8s
+      retries: 6
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   redis-data:

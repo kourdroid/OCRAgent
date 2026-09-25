@@ -6,13 +6,15 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
+import aiofiles
 import httpx
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from src.core.nodes import VendorIdentification, compute_fingerprint, discover_schema, extract_with_schema, identify_vendor
 from src.core.state import AgentState
-from src.plugins.supply_chain import execute_3_way_match
+from src.plugins.base import DEFAULT_CLIENT_ID
+from src.plugins.registry import ClientPluginRegistry, DEFAULT_PLUGIN_REGISTRY
 from src.schemas import RegistrySchema
 
 logger = logging.getLogger(__name__)
@@ -22,34 +24,6 @@ def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
     return re.sub(r'\d+', '', re.sub(r'[\/:\-\.]+', ' ', text)).strip().lower()
-
-
-def _extract_po_number(value: Any) -> str:
-    raw_value = str(value or "").strip()
-    if not raw_value:
-        return ""
-
-    first_segment = raw_value.split("/", 1)[0].splitlines()[0].strip()
-    match = re.search(r"[A-Za-z]{1,10}[A-Za-z0-9\-]*\d[A-Za-z0-9\-]*", first_segment)
-    return match.group(0).strip() if match else first_segment
-
-
-def _find_po_reference(extracted_data: dict[str, Any]) -> tuple[str, str]:
-    candidate_keys = [
-        "order_reference",
-        "po_number",
-        "purchase_order_number",
-        "purchase_order_no",
-        "purchase_order_ref",
-    ]
-
-    for key in candidate_keys:
-        raw_value = extracted_data.get(key, "")
-        clean_value = _extract_po_number(raw_value)
-        if clean_value:
-            return key, clean_value
-
-    return "", ""
 
 
 def _build_processing_notification(audit_report: dict[str, Any]) -> dict[str, Any]:
@@ -84,10 +58,27 @@ def _build_processing_notification(audit_report: dict[str, Any]) -> dict[str, An
 
 
 class RegistryRepository(Protocol):
-    async def get_vendor_schemas(self, vendor_name: str) -> list[dict[str, Any]]: ...
-    async def get_all_schemas(self) -> list[dict[str, Any]]: ...
-    async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]: ...
-    async def get_goods_receipts(self, po_number: str) -> list[dict[str, Any]]: ...
+    async def get_vendor_schemas(
+        self,
+        vendor_name: str,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> list[dict[str, Any]]: ...
+
+    async def get_all_schemas(
+        self,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> list[dict[str, Any]]: ...
+
+    async def get_po_lines(
+        self,
+        po_number: str,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> list[dict[str, Any]]: ...
+    async def get_goods_receipts(
+        self,
+        po_number: str,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> list[dict[str, Any]]: ...
 
 
 class JobsRepository(Protocol):
@@ -106,16 +97,19 @@ class GraphDeps:
     registry: RegistryRepository
     jobs: JobsRepository
     webhook: WebhookClient
+    plugin_registry: ClientPluginRegistry = DEFAULT_PLUGIN_REGISTRY
+    drift_threshold: float = 0.8
 
 
-def _load_document(file_path: str) -> Any:
+async def _load_document(file_path: str) -> Any:
     if file_path.startswith("http://") or file_path.startswith("https://"):
-        resp = httpx.get(file_path)
-        resp.raise_for_status()
-        pdf_bytes = resp.content
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(file_path)
+            response.raise_for_status()
+            pdf_bytes = response.content
     else:
-        with open(file_path, "rb") as f:
-            pdf_bytes = f.read()
+        async with aiofiles.open(file_path, "rb") as file:
+            pdf_bytes = await file.read()
 
     class PDFPart:
         mime_type = "application/pdf"
@@ -127,19 +121,27 @@ def _load_document(file_path: str) -> Any:
 async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Command[str]:
     job_id = state.get("job_id")
     file_path = state.get("file_path")
+    client_id = state.get("client_id") or DEFAULT_CLIENT_ID
     if not job_id or not file_path:
         return Command(update={"error": "Missing job_id or file_path"}, goto=END)
 
-    logger.info("job=%s step=fingerprint_and_lookup status=start file=%s", job_id, file_path)
+    plugin = deps.plugin_registry.get(client_id)
+
+    logger.info(
+        "job=%s client=%s step=fingerprint_and_lookup status=start file=%s",
+        job_id,
+        client_id,
+        file_path,
+    )
     await deps.jobs.mark_processing(job_id, None)
 
-    image = _load_document(file_path)
+    image = await _load_document(file_path)
     ident: VendorIdentification = await identify_vendor(image)
 
     fingerprint_hash = compute_fingerprint(ident.header_text)
-    vendor_name = ident.vendor_name
+    vendor_name = plugin.normalize_vendor_name(ident.vendor_name)
 
-    registry_rows = await deps.registry.get_all_schemas()
+    registry_rows = await deps.registry.get_all_schemas(client_id=client_id)
 
     best_match = None
     highest_ratio = 0.0
@@ -154,7 +156,7 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
             highest_ratio = ratio
             best_match = row
 
-    if best_match and highest_ratio >= 0.80:
+    if best_match and highest_ratio >= deps.drift_threshold:
         matched_vendor = best_match.get("vendor_name") or vendor_name
         logger.info(
             "job=%s step=fingerprint_and_lookup registry=hit vendor=%s ratio=%.2f",
@@ -162,6 +164,7 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
         )
         return Command(
             update={
+                "client_id": client_id,
                 "detected_vendor": matched_vendor,
                 "current_schema": best_match["schema_definition"],
                 "drift_confidence": highest_ratio,
@@ -177,6 +180,7 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
         )
         return Command(
             update={
+                "client_id": client_id,
                 "detected_vendor": vendor_name,
                 "fingerprint_hash": fingerprint_hash,
                 "ocr_text_cache": ident.header_text,
@@ -186,17 +190,22 @@ async def _node_fingerprint_and_lookup(state: AgentState, deps: GraphDeps) -> Co
         )
 
 
-async def _node_discovery_agent(state: AgentState) -> Command[str]:
+async def _node_discovery_agent(state: AgentState, deps: GraphDeps) -> Command[str]:
     job_id = state.get("job_id", "?")
     file_path = state.get("file_path")
+    client_id = state.get("client_id") or DEFAULT_CLIENT_ID
     if not file_path:
         return Command(update={"error": "Missing file_path"}, goto=END)
 
+    plugin = deps.plugin_registry.get(client_id)
     logger.info("job=%s step=discovery_agent status=start", job_id)
-    image = _load_document(file_path)
-    schema = await discover_schema(image)
+    image = await _load_document(file_path)
+    schema = plugin.enrich_schema(await discover_schema(image))
     logger.info("job=%s step=discovery_agent status=done vendor=%s version=%s", job_id, schema.vendor_name, schema.version)
-    return Command(update={"proposed_schema": schema.model_dump()}, goto="human_hold")
+    return Command(
+        update={"client_id": client_id, "proposed_schema": schema.model_dump()},
+        goto="human_hold",
+    )
 
 
 async def _node_human_hold(state: AgentState, deps: GraphDeps) -> Command[str]:
@@ -227,11 +236,10 @@ async def _node_extract(state: AgentState, deps: GraphDeps) -> Command[str]:
         return Command(update={"error": "Missing job_id, file_path, or current_schema"}, goto=END)
 
     logger.info("job=%s step=extract status=start vendor=%s", job_id, vendor_name)
-    image = _load_document(file_path)
+    image = await _load_document(file_path)
     schema = RegistrySchema.model_validate(schema_dict)
     extracted = await extract_with_schema(image, schema)
 
-    await deps.jobs.mark_completed(job_id, vendor_name, extracted)
     logger.info("job=%s step=extract status=done keys=%s", job_id, sorted(list(extracted.keys())))
     return Command(update={"final_output": extracted}, goto="reconcile")
 
@@ -240,75 +248,11 @@ async def _node_reconcile(state: AgentState, deps: GraphDeps) -> Command[str]:
     job_id = state.get("job_id")
     extracted_data = state.get("final_output", {})
     vendor_name = state.get("detected_vendor")
+    client_id = state.get("client_id") or DEFAULT_CLIENT_ID
 
-    logger.info("job=%s step=reconcile status=start", job_id)
-
-    po_source_key, clean_po = _find_po_reference(extracted_data)
-
-    logger.info(
-        "job=%s step=reconcile po_lookup source_key=%s available_keys=%s clean_po=%s",
-        job_id,
-        po_source_key or "missing",
-        sorted(list(extracted_data.keys())),
-        clean_po or "missing",
-    )
-
-    if not clean_po:
-        logger.warning("job=%s step=reconcile status=blocked reason=no_po_found", job_id)
-        audit = {
-            "status": "BLOCKED_DISCREPANCY",
-            "discrepancies": [
-                {
-                    "type": "UNAUTHORIZED_ITEM",
-                    "item": "PO_REFERENCE",
-                    "message": "No purchase order reference found in extracted invoice data.",
-                    "why": "The document could not be linked to any ERP purchase order because no PO reference was extracted.",
-                    "where": {
-                        "document": "invoice.metadata",
-                        "field": "order_reference|po_number|purchase_order_number",
-                    },
-                    "detected_from": {
-                        "sources": [
-                            "invoice.order_reference",
-                            "invoice.po_number",
-                            "invoice.purchase_order_number",
-                        ],
-                        "comparison": "po_reference_presence_check",
-                    },
-                    "anomaly": {
-                        "kind": "missing_reference",
-                        "metric": "purchase_order_reference",
-                        "expected": "A valid PO number in the extracted invoice metadata",
-                        "actual": "No PO-like value found in known PO reference fields",
-                    },
-                }
-            ],
-            "shortage_detected": False,
-            "notification": {
-                "shortage_detected": False,
-                "severity": "warning",
-                "title": "No quantity shortage detected",
-                "message": "Document is blocked because no purchase order reference was found.",
-                "discrepancy_count": 1,
-            },
-        }
-        extracted_data["audit_report"] = audit
-        extracted_data["processing_notification"] = _build_processing_notification(audit)
-        if job_id:
-            await deps.jobs.mark_completed(job_id, vendor_name, extracted_data)
-        return Command(
-            update={"final_output": extracted_data, "reconciliation_audit": audit},
-            goto="deliver_webhook",
-        )
-
-    po_lines = await deps.registry.get_po_lines(clean_po)
-    receipt_lines = await deps.registry.get_goods_receipts(clean_po)
-    audit_report = execute_3_way_match(
-        invoice_data=extracted_data,
-        po_lines=po_lines,
-        receipt_lines=receipt_lines,
-        price_tolerance=0.05,
-    )
+    logger.info("job=%s client=%s step=reconcile status=start", job_id, client_id)
+    plugin = deps.plugin_registry.get(client_id)
+    audit_report = await plugin.reconcile(extracted_data, deps.registry)
 
     logger.info(
         "job=%s step=reconcile status=done audit_status=%s discrepancies=%d",
@@ -329,10 +273,13 @@ async def _node_reconcile(state: AgentState, deps: GraphDeps) -> Command[str]:
 
 async def _node_deliver_webhook(state: AgentState, deps: GraphDeps) -> Command[str]:
     job_id = state.get("job_id")
+    client_id = state.get("client_id") or DEFAULT_CLIENT_ID
     payload = state.get("final_output")
     if job_id and payload:
-        logger.info("job=%s step=deliver_webhook status=start", job_id)
-        await deps.webhook.send(job_id, payload)
+        plugin = deps.plugin_registry.get(client_id)
+        delivery_payload = plugin.build_delivery_payload(job_id, payload)
+        logger.info("job=%s client=%s step=deliver_webhook status=start", job_id, client_id)
+        await deps.webhook.send(job_id, delivery_payload)
         logger.info("job=%s step=deliver_webhook status=done", job_id)
     return Command(update={}, goto=END)
 
@@ -343,7 +290,10 @@ def build_graph(deps: GraphDeps, *, checkpointer: Any | None = None):
     async def fingerprint_and_lookup(state: AgentState) -> Command[str]:
         return await _node_fingerprint_and_lookup(state, deps)
 
-    builder.add_node("discovery_agent", _node_discovery_agent)
+    async def discovery_agent(state: AgentState) -> Command[str]:
+        return await _node_discovery_agent(state, deps)
+
+    builder.add_node("discovery_agent", discovery_agent)
 
     async def human_hold(state: AgentState) -> Command[str]:
         return await _node_human_hold(state, deps)

@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
+
+from src.plugins.base import DEFAULT_CLIENT_ID, ReconciliationRepos
+from src.schemas import RegistrySchema
 
 logger = logging.getLogger(__name__)
 
@@ -284,3 +288,121 @@ def execute_3_way_match(
         "shortage_detected": shortage_detected,
         "notification": notification,
     }
+
+
+def _extract_po_number(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    first_segment = text.split("/", 1)[0].splitlines()[0].strip()
+    match = re.search(
+        r"[A-Za-z]{1,10}[A-Za-z0-9\-]*\d[A-Za-z0-9\-]*",
+        first_segment,
+    )
+    if match:
+        return match.group(0).strip()
+
+    digits = re.search(r"\b\d{4,}\b", first_segment)
+    if digits:
+        return f"PO-{digits.group(0)}"
+    return None
+
+
+def _find_po_reference(data: dict[str, Any]) -> tuple[str | None, str | None]:
+    direct_keys = (
+        "order_reference",
+        "po_number",
+        "purchase_order",
+        "purchase_order_number",
+        "purchase_order_no",
+        "purchase_order_ref",
+    )
+    for key in direct_keys:
+        if key in data:
+            po_number = _extract_po_number(data.get(key))
+            if po_number:
+                return key, po_number
+
+    for key, value in data.items():
+        if isinstance(value, (str, int)):
+            po_number = _extract_po_number(value)
+            if po_number:
+                return key, po_number
+    return None, None
+
+
+def _build_processing_notification(audit_report: dict[str, Any]) -> Any:
+    notification = audit_report.get("notification")
+    if notification:
+        return notification
+
+    if audit_report.get("shortage_detected"):
+        return "Inventory shortage detected during reconciliation"
+
+    status = audit_report.get("status", "unknown")
+    return f"Reconciliation completed with status {status}"
+
+
+def _no_po_audit() -> dict[str, Any]:
+    return {
+        "status": "not_reconciled",
+        "discrepancies": [
+            {
+                "type": "missing_po_reference",
+                "message": "No purchase order reference was detected in extracted invoice data.",
+            }
+        ],
+        "shortage_detected": False,
+        "notification": "Invoice extracted, but no PO reference was found for 3-way matching.",
+    }
+
+
+@dataclass(frozen=True)
+class SupplyChainPlugin:
+    client_id: str = DEFAULT_CLIENT_ID
+    display_name: str = "Default Supply Chain"
+    plugin_version: str = "1"
+
+    def normalize_vendor_name(self, value: str) -> str:
+        normalized = "_".join(value.strip().split())
+        return normalized or "UNKNOWN"
+
+    def enrich_schema(self, schema: RegistrySchema) -> RegistrySchema:
+        return schema.model_copy(
+            update={"vendor_name": self.normalize_vendor_name(schema.vendor_name)}
+        )
+
+    async def reconcile(
+        self,
+        extracted_data: dict[str, Any],
+        repos: ReconciliationRepos,
+    ) -> dict[str, Any]:
+        _, po_number = _find_po_reference(extracted_data)
+        if po_number:
+            po_lines = await repos.get_po_lines(po_number, client_id=self.client_id)
+            receipt_lines = await repos.get_goods_receipts(
+                po_number,
+                client_id=self.client_id,
+            )
+            audit_report = execute_3_way_match(
+                extracted_data,
+                po_lines=po_lines,
+                receipt_lines=receipt_lines,
+            )
+        else:
+            audit_report = _no_po_audit()
+
+        audit_report["plugin_id"] = self.client_id
+        audit_report["plugin_version"] = self.plugin_version
+        audit_report["notification"] = _build_processing_notification(audit_report)
+        return audit_report
+
+    def build_delivery_payload(
+        self,
+        job_id: str,
+        extracted_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        return extracted_data

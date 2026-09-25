@@ -1,0 +1,11 @@
+{
+  "synthetic_demo": true,
+  "external_reference": "DELASSUS-DEMO-CONT-20260818-001",
+  "expected_decision": "BLOCKED",
+  "modified_document": "DUM 7672-08.pdf",
+  "expected_issue": "DUM container number 9999-99 conflicts with Bill of Lading container 767208.",
+  "rule_id": "transport.container_number_match.v1",
+  "severity": "critical",
+  "source_document_count": 7,
+  "note": "All files are local demo copies. The visible exception banner is intentional."
+}

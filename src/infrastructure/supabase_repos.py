@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 import asyncpg
 
+from src.plugins.base import DEFAULT_CLIENT_ID
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ async def get_connection_pool(
                     min_size=min_size,
                     max_size=max_size,
                     statement_cache_size=0,
+                    ssl="require",
                 )
                 break
             except OSError as exc:
@@ -93,11 +96,20 @@ class SupabaseRegistryRepository(_BaseRepository):
     def __init__(self, db: str | asyncpg.Pool) -> None:
         super().__init__(db)
 
-    async def get_vendor_schemas(self, vendor_name: str) -> list[dict[str, Any]]:
+    async def get_vendor_schemas(
+        self,
+        vendor_name: str,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> list[dict[str, Any]]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM document_registry WHERE vendor_name = $1", vendor_name
+                """
+                SELECT * FROM document_registry
+                WHERE client_id = $1 AND vendor_name = $2
+                """,
+                client_id,
+                vendor_name,
             )
             result = []
             for row in rows:
@@ -107,10 +119,19 @@ class SupabaseRegistryRepository(_BaseRepository):
                 result.append(data)
             return result
 
-    async def get_all_schemas(self) -> list[dict[str, Any]]:
+    async def get_all_schemas(
+        self,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> list[dict[str, Any]]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM document_registry WHERE is_active = TRUE")
+            rows = await conn.fetch(
+                """
+                SELECT * FROM document_registry
+                WHERE client_id = $1 AND is_active = TRUE
+                """,
+                client_id,
+            )
             result = []
             for row in rows:
                 data = dict(row)
@@ -119,19 +140,30 @@ class SupabaseRegistryRepository(_BaseRepository):
                 result.append(data)
             return result
 
-    async def upsert_schema(self, vendor_name: str, fingerprint_hash: str, ocr_text_cache: str, schema_definition: dict[str, Any]) -> None:
+    async def upsert_schema(
+        self,
+        vendor_name: str,
+        fingerprint_hash: str,
+        ocr_text_cache: str,
+        schema_definition: dict[str, Any],
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> None:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO document_registry (vendor_name, fingerprint_hash, ocr_text_cache, schema_definition, is_active, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (vendor_name, fingerprint_hash) DO UPDATE SET
+                INSERT INTO document_registry (
+                    client_id, vendor_name, fingerprint_hash, ocr_text_cache,
+                    schema_definition, is_active, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (client_id, vendor_name, fingerprint_hash) DO UPDATE SET
                     schema_definition = EXCLUDED.schema_definition,
                     ocr_text_cache = EXCLUDED.ocr_text_cache,
                     schema_version = document_registry.schema_version + 1,
                     is_active = EXCLUDED.is_active
                 """,
+                client_id,
                 vendor_name,
                 fingerprint_hash,
                 ocr_text_cache,
@@ -140,19 +172,39 @@ class SupabaseRegistryRepository(_BaseRepository):
                 datetime.now(timezone.utc)
             )
 
-    async def get_po_lines(self, po_number: str) -> list[dict[str, Any]]:
+    async def get_po_lines(
+        self,
+        po_number: str,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> list[dict[str, Any]]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM erp_po_lines WHERE po_number = $1", po_number
+                """
+                SELECT *
+                FROM erp_po_lines
+                WHERE client_id = $1 AND po_number = $2
+                """,
+                client_id,
+                po_number,
             )
             return [dict(r) for r in rows]
 
-    async def get_goods_receipts(self, po_number: str) -> list[dict[str, Any]]:
+    async def get_goods_receipts(
+        self,
+        po_number: str,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> list[dict[str, Any]]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM erp_goods_receipts WHERE po_number = $1", po_number
+                """
+                SELECT *
+                FROM erp_goods_receipts
+                WHERE client_id = $1 AND po_number = $2
+                """,
+                client_id,
+                po_number,
             )
             return [dict(r) for r in rows]
 
@@ -161,8 +213,16 @@ class SupabaseJobsRepository(_BaseRepository):
     def __init__(self, db: str | asyncpg.Pool) -> None:
         super().__init__(db)
 
-    async def create_job(self, *, job_id: str, file_url: str) -> None:
-        await self.create_jobs_bulk([{"job_id": job_id, "file_url": file_url}])
+    async def create_job(
+        self,
+        *,
+        job_id: str,
+        file_url: str,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> None:
+        await self.create_jobs_bulk(
+            [{"job_id": job_id, "file_url": file_url, "client_id": client_id}]
+        )
 
     async def create_jobs_bulk(self, jobs_data: list[dict[str, Any]]) -> None:
         if not jobs_data:
@@ -172,6 +232,7 @@ class SupabaseJobsRepository(_BaseRepository):
         records = [
             (
                 j["job_id"],
+                j.get("client_id", DEFAULT_CLIENT_ID),
                 "PENDING",
                 j["file_url"],
                 now,
@@ -184,8 +245,10 @@ class SupabaseJobsRepository(_BaseRepository):
         async with pool.acquire() as conn:
             await conn.executemany(
                 """
-                INSERT INTO processing_jobs (job_id, status, file_url, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO processing_jobs (
+                    job_id, client_id, status, file_url, created_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6)
                 """,
                 records,
             )
@@ -202,12 +265,26 @@ class SupabaseJobsRepository(_BaseRepository):
         self,
         *,
         status: Optional[str] = None,
+        client_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
-            if status:
+            if status and client_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM processing_jobs
+                    WHERE client_id = $1 AND status = $2
+                    ORDER BY created_at DESC
+                    LIMIT $3 OFFSET $4
+                    """,
+                    client_id,
+                    status,
+                    limit,
+                    offset,
+                )
+            elif status:
                 rows = await conn.fetch(
                     """
                     SELECT * FROM processing_jobs
@@ -216,6 +293,18 @@ class SupabaseJobsRepository(_BaseRepository):
                     LIMIT $2 OFFSET $3
                     """,
                     status,
+                    limit,
+                    offset,
+                )
+            elif client_id:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM processing_jobs
+                    WHERE client_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2 OFFSET $3
+                    """,
+                    client_id,
                     limit,
                     offset,
                 )

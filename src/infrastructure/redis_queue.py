@@ -7,9 +7,12 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import redis.asyncio as redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.config import Settings
+from src.plugins.base import DEFAULT_CLIENT_ID
 
 
 @dataclass(frozen=True)
@@ -66,8 +69,17 @@ class RedisQueue:
                 return
             raise
 
-    async def enqueue_job(self, *, job_id: str, file_path: str) -> str:
-        payload = {"job_id": job_id, "file_path": file_path}
+    async def enqueue_job(
+        self,
+        *,
+        job_id: str,
+        file_path: str,
+        client_id: str = DEFAULT_CLIENT_ID,
+    ) -> str:
+        payload = {"job_id": job_id, "file_path": file_path, "client_id": client_id}
+        return await self.enqueue_payload(payload)
+
+    async def enqueue_payload(self, payload: dict[str, Any]) -> str:
         message_id = await self._client.xadd(self._stream_key, {"payload": json.dumps(payload)})
         return str(message_id)
 
@@ -77,7 +89,11 @@ class RedisQueue:
 
         async with self._client.pipeline(transaction=False) as pipe:
             for job in jobs_data:
-                payload = {"job_id": job["job_id"], "file_path": job["file_path"]}
+                payload = {
+                    "job_id": job["job_id"],
+                    "file_path": job["file_path"],
+                    "client_id": job.get("client_id", DEFAULT_CLIENT_ID),
+                }
                 pipe.xadd(self._stream_key, {"payload": json.dumps(payload)})
             message_ids = await pipe.execute()
 
@@ -92,6 +108,8 @@ class RedisQueue:
                 count=count,
                 streams={self._stream_key: ">"},
             )
+        except (RedisTimeoutError, RedisConnectionError):
+            return None
         except ResponseError as exc:
             if "NOGROUP" in str(exc):
                 await self.ensure_group()

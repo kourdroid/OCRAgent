@@ -397,11 +397,12 @@ function DiscrepancyCard({ discrepancy }: DiscrepancyCardProps) {
 
 interface WaitingHumanPanelProps {
   jobId: string;
+  clientId: string;
   data: WaitingHumanData;
   onApproved: () => void;
 }
 
-function WaitingHumanPanel({ jobId, data, onApproved }: WaitingHumanPanelProps) {
+function WaitingHumanPanel({ jobId, clientId, data, onApproved }: WaitingHumanPanelProps) {
   const [isApproving, setIsApproving] = React.useState(false);
   const [approveError, setApproveError] = React.useState<string | null>(null);
 
@@ -411,6 +412,7 @@ function WaitingHumanPanel({ jobId, data, onApproved }: WaitingHumanPanelProps) 
     try {
       await approveSchema({
         job_id: jobId,
+        client_id: clientId,
         vendor_name: data.proposed_schema.vendor_name,
         schema_definition: data.proposed_schema,
       });
@@ -694,6 +696,7 @@ export default function ValidationStudioPage({
             {!isLoading && !error && isWaiting && job?.extracted_data && (
               <WaitingHumanPanel
                 jobId={jobId}
+                clientId={job.client_id}
                 data={job.extracted_data as WaitingHumanData}
                 onApproved={refetch}
               />
