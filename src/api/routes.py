@@ -4,8 +4,9 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
+import httpx
 import aiofiles
 import asyncpg
 import tempfile
@@ -17,7 +18,7 @@ from pydantic import BaseModel, Field
 from src.config import get_settings
 from src.core.pdf_splitter import split_pdf
 from src.infrastructure.redis_queue import RedisQueue
-from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository
+from src.infrastructure.supabase_repos import SupabaseJobsRepository, SupabaseRegistryRepository, get_connection_pool
 from src.infrastructure.supabase_storage import SupabaseStorage
 from src.plugins.base import DEFAULT_CLIENT_ID
 from src.plugins.registry import UnknownClientPluginError, get_client_plugin, normalize_client_id
@@ -99,7 +100,7 @@ async def ingest(
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             target_path = Path(tmpdir) / f"{job_id}.pdf"
-            
+
             content = await file.read()
             if not content:
                 logger.error("step=ingest status=failed reason=empty_file")
@@ -117,28 +118,39 @@ async def ingest(
             jobs_to_create: list[dict[str, str]] = []
 
             try:
-                for split_index, sp in enumerate(split_paths, start=1):
-                    sp_job_id = str(uuid.uuid4())
-                    split_name = Path(sp).name
-                    logger.info(
-                        "step=ingest split_process status=start split_index=%s total_splits=%s split_file=%s",
-                        split_index,
-                        len(split_paths),
-                        split_name,
-                    )
+                upload_tasks = []
+                sp_job_ids = []
 
-                    try:
-                        file_bytes = Path(sp).read_bytes()
-                        public_url = await storage.upload(f"{sp_job_id}.pdf", file_bytes)
-                    except Exception as exc:
-                        logger.exception(
-                            "step=ingest split_process status=failed phase=upload split_index=%s total_splits=%s split_file=%s",
+                async with httpx.AsyncClient(timeout=storage.timeout) as client:
+                    for split_index, sp in enumerate(split_paths, start=1):
+                        sp_job_id = str(uuid.uuid4())
+                        sp_job_ids.append(sp_job_id)
+                        split_name = Path(sp).name
+                        logger.info(
+                            "step=ingest split_process status=start split_index=%s total_splits=%s split_file=%s",
                             split_index,
                             len(split_paths),
                             split_name,
                         )
-                        raise SplitEnqueueError(phase="upload", split_file=split_name, original_error=exc) from exc
+                        file_bytes = Path(sp).read_bytes()
+                        upload_tasks.append(storage.upload(f"{sp_job_id}.pdf", file_bytes, client=client))
 
+                    try:
+                        # ⚡ Bolt Optimization:
+                        # Execute all storage uploads concurrently using asyncio.gather
+                        # We also pass a shared httpx.AsyncClient to avoid repeatedly
+                        # creating connection pools and performing TCP/TLS handshakes.
+                        public_urls = await asyncio.gather(*upload_tasks)
+                    except Exception as exc:
+                        logger.exception(
+                            "step=ingest split_process status=failed phase=upload total_splits=%s",
+                            len(split_paths),
+                        )
+                        raise SplitEnqueueError(
+                            phase="upload", split_file="multiple_splits", original_error=exc
+                        ) from exc
+
+                for sp_job_id, public_url in zip(sp_job_ids, public_urls):
                     jobs_to_create.append(
                         {
                             "job_id": sp_job_id,
@@ -157,7 +169,9 @@ async def ingest(
                             "step=ingest split_process status=failed phase=create_jobs_bulk total_splits=%s",
                             len(split_paths),
                         )
-                        raise SplitEnqueueError(phase="create_jobs_bulk", split_file="all_splits", original_error=exc) from exc
+                        raise SplitEnqueueError(
+                            phase="create_jobs_bulk", split_file="all_splits", original_error=exc
+                        ) from exc
 
                     try:
                         await queue.enqueue_jobs_bulk(jobs_to_create)
@@ -166,7 +180,9 @@ async def ingest(
                             "step=ingest split_process status=failed phase=enqueue_jobs_bulk total_splits=%s",
                             len(split_paths),
                         )
-                        raise SplitEnqueueError(phase="enqueue_jobs_bulk", split_file="all_splits", original_error=exc) from exc
+                        raise SplitEnqueueError(
+                            phase="enqueue_jobs_bulk", split_file="all_splits", original_error=exc
+                        ) from exc
             except Exception as exc:
                 logger.exception("step=ingest enqueue_failed count=%s", len(job_ids))
                 for jid in job_ids:
@@ -346,19 +362,13 @@ async def health() -> dict:
 
     async def _check_tables() -> dict[str, object]:
         try:
-            conn = await asyncpg.connect(
-                settings.database_url,
-                statement_cache_size=0,
-                ssl="require",
-            )
-            try:
+            pool = await get_connection_pool(settings.database_url)
+            async with pool.acquire() as conn:
                 await conn.execute("SELECT job_id FROM processing_jobs LIMIT 1")
                 await conn.execute("SELECT id FROM document_registry LIMIT 1")
                 await conn.execute("SELECT case_id FROM dossier_cases LIMIT 1")
                 await conn.execute("SELECT event_id FROM outbox_events LIMIT 1")
                 return {"ok": True}
-            finally:
-                await conn.close()
         except asyncpg.PostgresError as exc:
             code = getattr(exc, "sqlstate", "")
             return {"ok": False, "error": str(exc), "code": code}

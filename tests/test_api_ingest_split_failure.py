@@ -32,9 +32,10 @@ class DummyJobsRepo:
 
 class FailingStorage:
     def __init__(self, *_args, **_kwargs) -> None:
+        self.timeout = 60.0
         return None
 
-    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf") -> str:
+    async def upload(self, path: str, data: bytes, content_type: str = "application/pdf", client=None) -> str:
         raise TimeoutError("storage upload timed out")
 
 
@@ -66,5 +67,5 @@ def test_ingest_returns_split_phase_failure_detail(tmp_path: Path, monkeypatch) 
 
     assert resp.status_code == 500
     assert "during upload" in resp.json()["detail"]
-    assert "split_001.pdf" in resp.json()["detail"]
+    assert "multiple_splits" in resp.json()["detail"]
 
