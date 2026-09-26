@@ -10,3 +10,10 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2024-05-18 - [Regex Optimization in Repetitive Functions]
+**Learning:** Functions that parse strings using regular expressions on every invocation (like `_extract_po_number`) incur performance penalties if they use `re.search` directly with raw strings, as it causes repeated regex compilation/cache lookups.
+**Action:** Pre-compile regular expressions at the module level using `re.compile()` to improve performance and avoid redundant parsing.
+
+## 2024-05-18 - [Database Connections in Standalone Scripts]
+**Learning:** Using a shared application connection pool (e.g., `get_connection_pool`) is an anti-pattern for short-lived, standalone healthcheck scripts, because they cannot actually share the pool with the main process. This introduces unnecessary overhead and risks resource leaks if the pool is not explicitly closed.
+**Action:** For standalone scripts like `src/worker/healthcheck.py`, use simple, direct connections (`asyncpg.connect()`) instead of a connection pool.
