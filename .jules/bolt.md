@@ -10,3 +10,7 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+
+## 2024-05-18 - Memoize _sanitize_for_match in graph fingerprinting loop
+**Learning:** In `src/core/graph.py`, the `_node_fingerprint_and_lookup` function performs an O(N) scan over the registry schema cache. Because the same text cleanup (`_sanitize_for_match`) is performed on cached fields across iterations, not memoizing it led to repeated, expensive regex evaluations. Memoizing it reduces execution time significantly for large schema registries.
+**Action:** When performing O(N) operations in a loop over static or repetitive dataset fields, inspect the data normalization functions inside the loop to ensure they are properly cached using `@functools.lru_cache`.
