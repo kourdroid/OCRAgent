@@ -17,6 +17,8 @@ from src.plugins.base import DEFAULT_CLIENT_ID
 from src.plugins.registry import ClientPluginRegistry, DEFAULT_PLUGIN_REGISTRY
 from src.schemas import RegistrySchema
 
+import functools
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,6 +26,7 @@ _SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
 _SANITIZE_DIGIT_RE = re.compile(r'\d+')
 
 
+@functools.lru_cache(maxsize=1024)
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
