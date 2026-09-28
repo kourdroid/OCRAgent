@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -24,6 +25,11 @@ _SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
 _SANITIZE_DIGIT_RE = re.compile(r'\d+')
 
 
+# ⚡ Bolt Optimization:
+# Memoize `_sanitize_for_match` to bypass repetitive regex substitution overhead
+# during loop iterations where `text` is the same, speeding up vendor lookup loops.
+# Impact: Reduces `_sanitize_for_match` execution time from O(N) to O(1) for cached inputs.
+@functools.lru_cache(maxsize=1024)
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
