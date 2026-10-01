@@ -18,22 +18,15 @@ from pypdf import PdfReader, PdfWriter
 
 logger = logging.getLogger(__name__)
 
-_INVOICE_PATTERNS = [
-    re.compile(r"facture\s+r[ée]f", re.IGNORECASE),
-    re.compile(r"invoice\s+no", re.IGNORECASE),
-    re.compile(r"invoice\s+number", re.IGNORECASE),
-    re.compile(r"bill\s+of\s+lading", re.IGNORECASE),
-    re.compile(r"page\s+1\s+of\s+\d+", re.IGNORECASE),
-    re.compile(r"^\s*invoice\s*$", re.IGNORECASE),
-    re.compile(r"bon\s+de\s+livraison", re.IGNORECASE),
-]
+# ⚡ Bolt Optimization: Use a single combined regex for O(1) matching in C instead of O(N) in Python
+_COMBINED_INVOICE_PATTERN = re.compile(
+    r"facture\s+r[ée]f|invoice\s+no|invoice\s+number|bill\s+of\s+lading|page\s+1\s+of\s+\d+|^\s*invoice\s*$|bon\s+de\s+livraison",
+    re.IGNORECASE
+)
 
 
 def _looks_like_new_invoice(text: str) -> bool:
-    for pat in _INVOICE_PATTERNS:
-        if pat.search(text):
-            return True
-    return False
+    return bool(_COMBINED_INVOICE_PATTERN.search(text))
 
 
 def _extract_page_text(reader: PdfReader, page_index: int) -> str:
