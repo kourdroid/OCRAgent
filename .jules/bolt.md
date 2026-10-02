@@ -10,3 +10,6 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2024-03-08 - [Pre-compile Regex in Supply Chain Plugin]
+**Learning:** Found that `_extract_po_number` in `src/plugins/supply_chain.py` was compiling two regular expressions dynamically on every invocation. Since this function is called inside the loop resolving matches for POs, recompiling the regex adds unnecessary overhead.
+**Action:** When finding dynamically compiled regexes used repetitively inside matching logic or loops, hoist them to the module level via `re.compile()` for an O(1) compilation overhead. Also, remember to clean up scratchpad scripts before code review.
