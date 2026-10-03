@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -11,7 +12,9 @@ import httpx
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from src.core.nodes import VendorIdentification, compute_fingerprint, discover_schema, extract_with_schema, identify_vendor
+from src.core.nodes import (
+    VendorIdentification, compute_fingerprint, discover_schema, extract_with_schema, identify_vendor
+)
 from src.core.state import AgentState
 from src.plugins.base import DEFAULT_CLIENT_ID
 from src.plugins.registry import ClientPluginRegistry, DEFAULT_PLUGIN_REGISTRY
@@ -24,6 +27,10 @@ _SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
 _SANITIZE_DIGIT_RE = re.compile(r'\d+')
 
 
+# ⚡ Bolt Optimization:
+# Memoize text sanitization to prevent redundant regex executions across `registry_rows` iterations.
+# This eliminates redundant work when the same string is repeatedly sanitized.
+@functools.lru_cache(maxsize=1024)
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
@@ -80,6 +87,7 @@ class RegistryRepository(Protocol):
         po_number: str,
         client_id: str = DEFAULT_CLIENT_ID,
     ) -> list[dict[str, Any]]: ...
+
     async def get_goods_receipts(
         self,
         po_number: str,
@@ -89,8 +97,14 @@ class RegistryRepository(Protocol):
 
 class JobsRepository(Protocol):
     async def mark_processing(self, job_id: str, vendor_detected: Optional[str]) -> None: ...
-    async def mark_waiting_human(self, job_id: str, vendor_detected: Optional[str], extracted_data: dict[str, Any]) -> None: ...
-    async def mark_completed(self, job_id: str, vendor_detected: Optional[str], extracted_data: dict[str, Any]) -> None: ...
+
+    async def mark_waiting_human(
+        self, job_id: str, vendor_detected: Optional[str], extracted_data: dict[str, Any]
+    ) -> None: ...
+
+    async def mark_completed(
+        self, job_id: str, vendor_detected: Optional[str], extracted_data: dict[str, Any]
+    ) -> None: ...
     async def mark_failed(self, job_id: str, error_log: str) -> None: ...
 
 
@@ -215,7 +229,9 @@ async def _node_discovery_agent(state: AgentState, deps: GraphDeps) -> Command[s
     logger.info("job=%s step=discovery_agent status=start", job_id)
     image = await _load_document(file_path)
     schema = plugin.enrich_schema(await discover_schema(image))
-    logger.info("job=%s step=discovery_agent status=done vendor=%s version=%s", job_id, schema.vendor_name, schema.version)
+    logger.info(
+        "job=%s step=discovery_agent status=done vendor=%s version=%s", job_id, schema.vendor_name, schema.version
+    )
     return Command(
         update={"client_id": client_id, "proposed_schema": schema.model_dump()},
         goto="human_hold",
