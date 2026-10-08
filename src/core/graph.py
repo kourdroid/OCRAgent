@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -24,6 +25,9 @@ _SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
 _SANITIZE_DIGIT_RE = re.compile(r'\d+')
 
 
+# ⚡ Bolt Optimization:
+# Memoize text sanitization to prevent redundant regex operations during O(N) registry schema processing
+@functools.lru_cache(maxsize=2048)
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
