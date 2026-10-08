@@ -10,3 +10,9 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2025-02-28 - Optimize _sanitize_for_match in LangGraph processing
+**Learning:** Functions called iteratively in an O(N) loop without changing inputs internally (like  during schema matching) are prime candidates for memoization () to avoid redundant regex operations.
+**Action:** When working on text processing inside loops, check if the string inputs are repeatedly processed by the same regex or normalization functions. If so, apply .
+## 2025-02-28 - Optimize _sanitize_for_match in LangGraph processing
+**Learning:** Functions called iteratively in an O(N) loop without changing inputs internally (like `_sanitize_for_match` during schema matching) are prime candidates for memoization (`functools.lru_cache`) to avoid redundant regex operations.
+**Action:** When working on text processing inside loops, check if the string inputs are repeatedly processed by the same regex or normalization functions. If so, apply `functools.lru_cache`.
