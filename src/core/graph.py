@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ _SANITIZE_PUNC_RE = re.compile(r'[\/:\-\.]+')
 _SANITIZE_DIGIT_RE = re.compile(r'\d+')
 
 
+@functools.lru_cache(maxsize=2048)
 def _sanitize_for_match(text: str) -> str:
     if not text:
         return ""
@@ -80,6 +82,7 @@ class RegistryRepository(Protocol):
         po_number: str,
         client_id: str = DEFAULT_CLIENT_ID,
     ) -> list[dict[str, Any]]: ...
+
     async def get_goods_receipts(
         self,
         po_number: str,

@@ -10,3 +10,6 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2025-03-05 - [Regex LRU Caching]
+**Learning:** String sanitization functions relying on repetitive Regex substitutions can become performance bottlenecks when called in loops during fuzzy matching. Decorating pure string functions with `@functools.lru_cache` avoids redundant computation for duplicated strings.
+**Action:** Add `@functools.lru_cache(maxsize=2048)` to pure string normalization functions that run in heavy loops (e.g., `_sanitize_for_match`) to implement highly effective micro-optimizations in Python.
