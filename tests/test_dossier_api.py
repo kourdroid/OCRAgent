@@ -24,11 +24,12 @@ def _pdf_bytes() -> bytes:
 class _Storage:
     uploaded: list[str] = []
     deleted: list[str] = []
+    timeout = 10.0
 
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         pass
 
-    async def upload(self, path: str, _data: bytes) -> str:
+    async def upload(self, path: str, _data: bytes, client: Any = None) -> str:
         self.uploaded.append(path)
         return f"https://storage.example/{path}"
 
