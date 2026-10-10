@@ -10,3 +10,10 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2024-11-20 - [Test Mocks and Signature Changes]
+**Learning:** When updating method signatures in infrastructure classes like `SupabaseStorage` (e.g., adding a `client` parameter or `timeout` property), corresponding mock objects in tests (like `DummyStorage`, `FailingStorage`, or `_Storage` in different test files) must also be updated to match the new signature. Failing to do so will result in test failures such as `TypeError` or `AttributeError` during execution.
+**Action:** Always search the codebase for usages and mocks of modified classes to ensure all related instances are updated consistently.
+
+## 2024-11-20 - [Dependency Imports in Python]
+**Learning:** Adding a dependency like `httpx` requires an import statement. Placing the import statement inside the function block (`import httpx`) is bad practice and should generally be at the top of the file unless addressing a strict circular dependency.
+**Action:** When adding imports, place them at the top level of the file according to PEP 8 standards, grouped logically (standard library, third-party, local).

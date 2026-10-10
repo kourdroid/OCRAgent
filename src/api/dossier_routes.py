@@ -11,6 +11,7 @@ from typing import Any
 import asyncpg
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
+import httpx
 from pydantic import BaseModel
 from pypdf import PdfReader
 
@@ -169,6 +170,8 @@ async def ingest_dossier(
     max_bytes = settings.max_upload_mb * 1024 * 1024
 
     try:
+        upload_tasks = []
+        source_templates = []
         for upload in files:
             filename = upload.filename or "document.pdf"
             if not filename.lower().endswith(".pdf"):
@@ -201,15 +204,13 @@ async def ingest_dossier(
             storage_path = (
                 f"dossiers/{normalized_client_id}/{case_id}/{document_id}.pdf"
             )
-            file_url = await storage.upload(storage_path, content)
             uploaded_paths.append(storage_path)
-            sources.append(
+            source_templates.append(
                 {
                     "document_id": document_id,
                     "job_id": job_id,
                     "original_filename": filename,
                     "storage_path": storage_path,
-                    "file_url": file_url,
                     "sha256": hashlib.sha256(content).hexdigest(),
                     "page_count": page_count,
                     "idempotency_key": f"job:{job_id}:attempt:0",
@@ -222,6 +223,24 @@ async def ingest_dossier(
                     ),
                 }
             )
+            upload_tasks.append((storage_path, content))
+
+        # ⚡ Bolt Optimization:
+        # Execute all storage uploads concurrently using asyncio.gather
+        # We also pass a shared httpx.AsyncClient to avoid repeatedly
+        # creating connection pools and performing TCP/TLS handshakes.
+        public_urls = []
+        if upload_tasks:
+            async with httpx.AsyncClient(timeout=storage.timeout) as client:
+                tasks = [
+                    storage.upload(path, content, client=client)
+                    for path, content in upload_tasks
+                ]
+                public_urls = await asyncio.gather(*tasks)
+
+        for i, url in enumerate(public_urls):
+            source_templates[i]["file_url"] = url
+            sources.append(source_templates[i])
 
         result = await repository.create_case_with_sources(
             case_id=case_id,
