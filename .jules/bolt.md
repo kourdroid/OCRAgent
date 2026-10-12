@@ -10,3 +10,7 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+
+## 2024-05-18 - [Regex Compilation and LRU Caching]
+**Learning:** Precompiling regex inside functions heavily impacts performance. Caching repetitive regex sub functions drastically speeds up execution.
+**Action:** Always extract regex variables using `re.compile` to the module level. Wrap repetitively called functions with simple inputs in `@functools.lru_cache`.

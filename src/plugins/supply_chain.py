@@ -315,6 +315,10 @@ def execute_3_way_match(
     }
 
 
+_PO_REGEX = re.compile(r"[A-Za-z]{1,10}[A-Za-z0-9\-]*\d[A-Za-z0-9\-]*")
+_PO_DIGITS_REGEX = re.compile(r"\b\d{4,}\b")
+
+
 def _extract_po_number(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -323,14 +327,14 @@ def _extract_po_number(value: Any) -> Optional[str]:
         return None
 
     first_segment = text.split("/", 1)[0].splitlines()[0].strip()
-    match = re.search(
-        r"[A-Za-z]{1,10}[A-Za-z0-9\-]*\d[A-Za-z0-9\-]*",
-        first_segment,
-    )
+
+    # ⚡ Bolt Optimization:
+    # Use pre-compiled regex objects to avoid recompilation overhead
+    match = _PO_REGEX.search(first_segment)
     if match:
         return match.group(0).strip()
 
-    digits = re.search(r"\b\d{4,}\b", first_segment)
+    digits = _PO_DIGITS_REGEX.search(first_segment)
     if digits:
         return f"PO-{digits.group(0)}"
     return None
