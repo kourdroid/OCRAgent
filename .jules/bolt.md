@@ -10,3 +10,6 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2025-02-23 - [Regex Recompilation in Text Normalization]
+**Learning:** Functions repeatedly processing text in large datasets (e.g., `_sanitize_for_match` in `src/core/graph.py` and `_extract_po_number` in `src/plugins/supply_chain.py`) suffer measurable overhead from redundant regex evaluations.
+**Action:** Always pre-compile regexes at the module level using `re.compile()` instead of inline `re.search` or `re.sub`. Furthermore, apply `@functools.lru_cache` to deterministic text transformation functions called in tight loops to avoid redundant regex operations altogether.
