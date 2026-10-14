@@ -10,3 +10,6 @@
 ## 2025-02-23 - Database Connection Pooling Overhead
  **Learning:** Instantiating raw `asyncpg.connect()` connections inside high-frequency application routes (like `/health`) introduces significant TCP/TLS handshake latency, which can bottleneck application responsiveness and exhaust database connection limits.
  **Action:** Always use shared application connection pools (`get_connection_pool`) for route handlers and acquire connections from the pool (`async with pool.acquire() as conn:`) instead of spinning up isolated connections per request.
+## 2024-05-18 - [LRU Caching for Text Normalization Functions]
+**Learning:** Functions called frequently in tight loops (like `_sanitize_for_match` inside the `_node_fingerprint_and_lookup` node) that perform text normalization (like stripping punctuation or digits) using regular expressions can become performance bottlenecks due to repetitive operations.
+**Action:** Use `@functools.lru_cache` to cache the results of text normalization functions to prevent repetitive string/regex operations.
